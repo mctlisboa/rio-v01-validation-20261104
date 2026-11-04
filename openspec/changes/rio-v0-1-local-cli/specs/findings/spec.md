@@ -5,7 +5,7 @@ The finding model is the single representation every check, renderer and later a
 ## ADDED Requirements
 
 ### Requirement: Finding model
-A finding SHALL have: `id` (stable identity), `rule_id`, `category` (`defect` or `risk`), `evidence_level`, `severity` (`error`, `warning`, `info`), `state` (`new`, `pre-existing`, `fixed`, `unclassified`), `location` (repository-relative path, line range, optional column, enclosing symbol path), `message`, `trigger` (the condition under which the problem manifests), optional `impact`, optional `suggested_fix`, `evidence` (references to artifacts in the review cache), `source` (tool and version, or agent name), and `locations` for additional occurrences merged by root cause. The JSON form SHALL validate against `schemas/finding-v1.json`.
+A finding SHALL have: `id` (stable identity), `rule_id`, `category` (`defect` or `risk`), `evidence_level`, `severity` (`error`, `warning`, `info`), `state` (`new`, `worsened`, `pre-existing`, `fixed`, `unclassified`), `location` (repository-relative path, line range, optional column, enclosing symbol path), `message`, `trigger` (the condition under which the problem manifests), optional `impact`, optional `suggested_fix`, `evidence` (references to artifacts in the review cache), `source` (tool and version, or agent name), `locations` for every occurrence merged by root cause, each with its own line range and `occurrence_state` (`new`, `pre-existing`, `fixed` or `unclassified`), and, for `dependency/*` findings, an `advisory` block (`id`, `aliases`, `severity` from `critical`, `high`, `moderate`, `low`, `unknown`, `fixed_version` or `unknown`, `url`). The JSON form SHALL validate against `schemas/finding-v1.json`.
 
 #### Scenario: JSON validates against the schema
 - **WHEN** a review is rendered as JSON
@@ -30,14 +30,22 @@ The id SHALL be `blake3(rule_id | normalized_location | trigger_hash)` where `no
 - **THEN** they produce two findings with different ids
 
 ### Requirement: One finding per root cause
-Findings from the same source with equal `rule_id`, enclosing symbol path and `trigger_hash` SHALL be merged into one finding whose `locations` lists every occurrence. Separate root causes SHALL NOT be merged even when they share a line.
+Findings from the same source with equal `rule_id`, enclosing symbol path and `trigger_hash` SHALL be merged into one finding whose `locations` lists every occurrence. Merging SHALL happen after each occurrence has been classified, so grouping never hides an occurrence's state. Separate root causes SHALL NOT be merged even when they share a line. Finding ids SHALL be unique within a report.
 
 #### Scenario: Repeated error in one function
 - **WHEN** the type checker reports the same error code and message on four lines of one function
 - **THEN** the report shows one finding with four locations
 
 ### Requirement: Regression state
-`state` SHALL be set from baseline classification where available: `new` for findings absent from the base version, `pre-existing` for findings present in both, `fixed` for findings only in base, and `unclassified` when no baseline was obtained. Only `new` and `unclassified` findings SHALL be rendered in the main findings section.
+Classification SHALL operate on occurrences, as defined by the deterministic-checks capability, and the finding's `state` SHALL be derived from its occurrences: `new` when every occurrence is new; `worsened` when at least one occurrence is new and at least one is pre-existing; `pre-existing` when no occurrence is new and at least one is pre-existing; `fixed` when every occurrence exists only in the base; and `unclassified` when no baseline was obtained. A `pre-existing` finding that lost occurrences SHALL report the number of fixed occurrences. Only `new`, `worsened` and `unclassified` findings SHALL be rendered in the main findings section. A `worsened` finding SHALL show which of its locations are new.
+
+#### Scenario: Worsened finding shows the new occurrence
+- **WHEN** a grouped type error had one occurrence in base and has that occurrence plus one new occurrence in head
+- **THEN** the finding has state `worsened`, appears in the main findings section, and its `locations` mark one occurrence `pre-existing` and one `new`
+
+#### Scenario: Fewer occurrences is not a regression
+- **WHEN** a grouped lint error had three occurrences in base and has two of them in head
+- **THEN** the finding has state `pre-existing`, is not listed among open findings, and reports one fixed occurrence
 
 #### Scenario: Fixed finding counted
 - **WHEN** a lint error present in base is absent in head

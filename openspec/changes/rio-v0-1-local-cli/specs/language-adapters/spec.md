@@ -5,18 +5,28 @@ Language adapters are the modules that teach Rio how a language's projects are l
 ## ADDED Requirements
 
 ### Requirement: Adapter contract
-An adapter SHALL declare, in a `module.yaml` manifest of kind `adapter`: the languages it handles, the file patterns that belong to it, the capabilities it implements from the set `parse`, `typecheck`, `lint`, `test`, `coverage`, `scan`, and for each capability the tools it can use in preference order with the network domains each tool needs. The engine SHALL only schedule a capability the adapter declares and for which a usable tool was resolved.
+An adapter SHALL declare, in a `module.yaml` manifest of kind `adapter`: the languages it handles, the file patterns that belong to it, the capabilities it implements from the set `parse`, `typecheck`, `lint`, `test`, `coverage`, `scan`, and for each capability the tools it can use in preference order, with the network domains each tool needs and the tool's exit-code contract (which codes mean completed without diagnostics, which mean completed with diagnostics; every other code is a failure). The engine SHALL only schedule a capability the adapter declares and for which a usable tool was resolved.
 
 #### Scenario: Undeclared capability is never scheduled
 - **WHEN** an adapter declares `parse` and `typecheck` only
 - **THEN** the engine reports `lint`, `coverage` and `scan` for that language as skipped with reason `not_supported_by_adapter`, and invokes no lint tool
 
 ### Requirement: Repository detection and project roots
-The engine SHALL detect languages from manifests and configuration files (`package.json` or `tsconfig.json` for TypeScript; `pyproject.toml`, `setup.py`, `setup.cfg`, `requirements*.txt` or `Pipfile` for Python) and from the extensions of changed files. For each changed file it SHALL determine a project root as the nearest ancestor directory containing that language's manifest, so tools run with the correct working directory. A repository with several project roots (monorepo) SHALL be handled by running tools once per affected root.
+The engine SHALL detect languages from manifests and configuration files (`package.json` or `tsconfig.json` for TypeScript; `pyproject.toml`, `setup.py`, `setup.cfg`, `requirements*.txt` or `Pipfile` for Python) and from the extensions of changed files. For each changed file it SHALL determine a project root as the nearest ancestor directory containing that language's manifest, so tools run with the correct working directory. A repository with several project roots (monorepo) SHALL be handled by running tools once per scheduled root.
+
+The engine SHALL discover workspaces from `package.json` `workspaces`, `pnpm-workspace.yaml`, and `[tool.uv.workspace]` in `pyproject.toml`. Each member root SHALL be associated with its workspace root, whose lockfile and installation govern the member when the member has neither of its own. It SHALL build a root dependency graph from workspace dependencies between members, TypeScript project `references`, and Python path or editable dependencies on other roots. The scheduled roots for `typecheck` and `coverage` SHALL be the roots that contain changed files, plus every root that transitively depends on one of them. Roots added this way SHALL be labelled `dependent` in the report. `lint` runs only on changed files, so it is scheduled only for roots that contain changed files.
 
 #### Scenario: Monorepo with two TypeScript packages
 - **WHEN** changes touch `packages/api/src/a.ts` and `packages/web/src/b.ts`, each package having its own `tsconfig.json`
 - **THEN** the type check runs once in `packages/api` and once in `packages/web`, and findings carry repository-relative paths
+
+#### Scenario: Shared package change checks its consumers
+- **WHEN** a change touches only `packages/shared/src/format.ts`, and `packages/api` declares `"@acme/shared": "workspace:*"` while `packages/web` does not depend on it
+- **THEN** the type check runs in `packages/shared` and in `packages/api` (labelled `dependent`), does not run in `packages/web`, and lint runs only in `packages/shared`
+
+#### Scenario: Member root uses the workspace lockfile
+- **WHEN** `packages/api` has a `package.json` but no lockfile, and the repository root has `pnpm-workspace.yaml` and `pnpm-lock.yaml`
+- **THEN** dependency compatibility for `packages/api` is verified against the `packages/api` importer in the root `pnpm-lock.yaml`
 
 #### Scenario: Changed file without a manifest
 - **WHEN** a `.py` file is changed in a directory tree with no Python manifest
@@ -30,7 +40,7 @@ For each capability the adapter SHALL prefer a project-local tool (`node_modules
 - **THEN** the `typecheck` capability is skipped with reason `tool_missing` and an install hint, and the review continues
 
 ### Requirement: Excluded paths
-Adapters and checks SHALL skip vendored directories (`node_modules`, `.venv`, `venv`, `vendor`, `dist`, `build` unless they contain changed source tracked by git), files marked `linguist-generated` in `.gitattributes`, and files matching the profile's exclusion globs. Excluded files SHALL be listed in the report footer with their reason.
+Adapters and checks SHALL skip vendored directories (`node_modules`, `.venv`, `venv`, `vendor`, `dist`, `build` unless they contain changed source tracked by git), files marked `linguist-generated` in `.gitattributes`, and files matching the profile's exclusion globs (`rio/prepare` `with: { exclude: [<glob>...] }`, resolved relative to the repository root). Excluded files SHALL be listed in the report footer with their reason.
 
 #### Scenario: Generated file skipped
 - **WHEN** a changed file matches a `linguist-generated=true` attribute
@@ -59,8 +69,12 @@ The Python adapter SHALL handle `.py` and `.pyi` files. It SHALL implement `pars
 - **THEN** a finding with rule id `lint/ruff/F401`, path `pkg/mod.py` and line 3 is produced
 
 ### Requirement: Output normalization
-Every tool invocation SHALL be converted into findings with repository-relative path, line, optional column, rule id and message. When a tool's output cannot be parsed, the capability SHALL be reported as skipped with reason `unparseable_output`, and the raw output SHALL be kept in the review cache for inspection. Tool exit codes alone SHALL NOT be treated as findings.
+Every tool invocation SHALL be converted into findings with repository-relative path, line, optional column, rule id and message, and into one check outcome as defined by the deterministic-checks capability. When a tool's output cannot be parsed, the outcome SHALL be `failed` with reason `unparseable_output`, and the raw output SHALL be kept in the review cache for inspection. Tool exit codes alone SHALL NOT be treated as findings, and they SHALL NOT be ignored either: the adapter's exit-code contract decides whether the run completed.
 
 #### Scenario: Unexpected tool output
 - **WHEN** `tsc` prints output in a format the adapter does not recognize
-- **THEN** `typecheck` is skipped with reason `unparseable_output`, the raw output is saved under the review cache, and the run continues
+- **THEN** the `typecheck` outcome is `failed` with reason `unparseable_output`, the raw output is saved under the review cache, and the run continues
+
+#### Scenario: Diagnostic exit code without parsed findings
+- **WHEN** `ruff` exits 1, which its contract defines as "completed with diagnostics", but its JSON output contains no diagnostics
+- **THEN** the `lint` outcome is `failed` with reason `unparseable_output`, not `passed`

@@ -23,7 +23,7 @@ A profile SHALL declare `version: 1`. The top-level keys SHALL be `version`, `na
 - **THEN** validation fails stating that only version 1 is supported
 
 ### Requirement: Single inheritance
-A profile MAY declare one `extends` referencing another profile by name or path. Resolution SHALL deep-merge mappings, child over parent, and SHALL replace lists wholesale when the child declares them. Inheritance cycles SHALL be rejected. The resolved profile SHALL record the full chain.
+A profile MAY declare one `extends` referencing another profile by name or path. A relative path SHALL be resolved against the directory of the file that declares it, not against the current directory. A name SHALL be resolved with the discovery order. Resolution SHALL deep-merge mappings, child over parent, and SHALL replace lists wholesale when the child declares them. Inheritance cycles SHALL be rejected. The resolved profile SHALL record the full chain.
 
 #### Scenario: Child overrides a nested budget value
 - **WHEN** the parent sets `budget.fast.wall_time: 4m` and `budget.fast.tokens: 200000`, and the child sets only `budget.fast.wall_time: 2m`
@@ -32,6 +32,10 @@ A profile MAY declare one `extends` referencing another profile by name or path.
 #### Scenario: Child list replaces the parent list
 - **WHEN** the parent declares three `suppress` entries and the child declares one
 - **THEN** the resolved profile has exactly the child's one entry
+
+#### Scenario: Relative extends resolved from the declaring file
+- **WHEN** `.rio/profiles/team/strict.yaml` declares `extends: ../shared.yaml` and `rio review --profile ../.rio/profiles/team/strict.yaml` runs from the `src/` directory
+- **THEN** the parent loaded is `.rio/profiles/shared.yaml`
 
 #### Scenario: Inheritance cycle
 - **WHEN** profile A extends B and B extends A
@@ -62,6 +66,16 @@ A resolved profile that contains any step using `rio/agents` SHALL also contain 
 - **WHEN** a rule reads `when: owns("src/**")`
 - **THEN** validation fails naming `owns` as an unknown predicate
 
+### Requirement: Built-in step options
+The `with` schemas of the built-in steps SHALL define the review settings that this version supports. Each option SHALL be validated against the step's schema:
+- `rio/prepare`: `exclude` (list of globs relative to the repository root, default `[]`);
+- `rio/checks`: `typecheck`, `lint`, `secrets`, `coverage`, `dependencies`, `baseline` (booleans, default `true`), and `trust_installed_dependencies` (boolean, default `false`);
+- `rio/graph`: `hops` (default 2) and `max_nodes` (default 2000).
+
+#### Scenario: Exclusion glob from the profile
+- **WHEN** the `rio/prepare` step sets `with: { exclude: ["docs/generated/**"] }` and a change modifies `docs/generated/api.ts`
+- **THEN** the file is excluded from checks and the graph, and the footer lists it with reason `profile_exclude`
+
 ### Requirement: Local execution subset
 When no endpoint is configured, the engine SHALL execute steps whose module is locally executable (`rio/prepare` without its intent agent, `rio/checks`, `rio/graph`, `rio/report`) in `needs` order, and SHALL mark every other step (`rio/triage`, `rio/agents`, `rio/verify`) as deferred in the report without failing the run.
 
@@ -77,11 +91,27 @@ When no endpoint is configured, the engine SHALL execute steps whose module is l
 - **THEN** no `lint/eslint/...` finding appears and the footer shows the suppressed count
 
 ### Requirement: Fail policy
-`fail_on` SHALL have `evidence` (minimum evidence level that fails, default `static_proven`), `categories` (default `[defect]`), `states` (default `[new]`), and optional `rules` (globs over rule ids that fail regardless of the other criteria). The review exit code SHALL follow this policy as defined by the review CLI capability.
+`fail_on` SHALL have:
+- `evidence`: the minimum evidence level that fails, default `static_proven`;
+- `categories`: default `[defect]`;
+- `states`: default `[new, worsened]`;
+- `rules`: optional globs over rule ids that fail regardless of the other criteria;
+- `incomplete`: default `true`. When it is true, the review is incomplete if any check ended `failed` or `cancelled`, or if a kind listed in `required_checks` has a scheduled root whose outcome is `skipped`;
+- `required_checks`: kinds that must complete on every scheduled root, default `[]`. With the default, a skipped check (for example a missing tool) stays a warning.
+
+The review exit code SHALL follow this policy as defined by the review CLI capability.
 
 #### Scenario: Risks do not fail by default
 - **WHEN** the only findings are `coverage/untested_change` risks and `fail_on` is not customized
 - **THEN** the review exits 0
+
+#### Scenario: Required check that could not run
+- **WHEN** `fail_on.required_checks` is `[typecheck]` and `tsc` is not installed
+- **THEN** the review exits 4 and names the skipped type check
+
+#### Scenario: Incompleteness tolerated on request
+- **WHEN** `fail_on.incomplete` is `false`, the coverage check times out and no finding matches `fail_on`
+- **THEN** the review exits 0 and the footer still lists coverage as `cancelled` with reason `timeout`
 
 #### Scenario: Explicit rule fails regardless of category
 - **WHEN** `fail_on.rules` contains `coverage/*` and an `untested_change` risk is present
