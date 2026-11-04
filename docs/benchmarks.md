@@ -2,9 +2,9 @@
 
 Fast-mode reviews of a committed **300-line addition** in [gvergnaud/ts-pattern](https://github.com/gvergnaud/ts-pattern). Upstream contains 83 TypeScript files and 19,211 TypeScript lines before the benchmark addition. The benchmark adds an exported typed lookup table in `src/rio-benchmark.ts`; upstream configuration, tests, dependency declarations and lockfile remain unchanged.
 
-Base: `f11be73acb18e1d653d4f252e7d75981d873a2e6`. Benchmark head: `58b0b15b613877f6a879ebae48a67b4752310bae`. The head commit is local; reproduce the change by writing a 300-line `Record<string, number>` object with 298 numeric entries and committing it on the base.
+Base: `f11be73acb18e1d653d4f252e7d75981d873a2e6`. Benchmark head: `58b0b15b613877f6a879ebae48a67b4752310bae`. The head commit is local. Apply the preserved [change.patch](benchmark-data/change.patch) on that upstream base and commit it to reproduce the exact 300-line addition.
 
-Platform: `Linux-6.8.0-147-generic-x86_64-with-glibc2.39`; 20 logical CPUs. Dependencies were installed with `npm ci --ignore-scripts`. Rio command: `rio review --base benchmark-base --offline --format json`, built in release mode. Binary: `rio 0.1.0 x86_64-unknown-linux-gnu ce0eb3825675`; SHA-256 `9aef7d6352d3cfe78b164fafbee721c699c1e90a08967879ef051e8d2e75aa82`.
+Platform: `Linux-6.8.0-147-generic-x86_64-with-glibc2.39`; 20 logical CPUs. Dependencies were installed with `npm ci --ignore-scripts`: Node v26.13.0, npm 12.2.1, Version 5.9.2, Jest 30.1.2. Rio command: `rio review --base benchmark-base --offline --format json`, built in release mode. Binary: `rio 0.1.0 x86_64-unknown-linux-gnu ce0eb3825675`; SHA-256 `9aef7d6352d3cfe78b164fafbee721c699c1e90a08967879ef051e8d2e75aa82`.
 
 The binary was compiled from the implementation working tree before commit `8ea5d63`; its build commit label therefore names the preceding planning commit. The binary digest identifies the measured executable. Concurrent fixture tests, compilation and one real-PR review affected early cold runs; all observations, including the 111-second first-run outlier, are retained. These are local measurements, not a controlled CI performance claim.
 

@@ -2,5 +2,6 @@
 # Source: https://github.com/actions/runner-images/blob/main/README.md
 self-hosted-runner:
   labels:
+    - macos-26
     - macos-15-intel
     - windows-11-arm
