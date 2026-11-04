@@ -6,11 +6,11 @@ A checked box records actual evidence. Source code or a workflow definition alon
 - [x] Unix installer checks pass on Ubuntu and macOS; PowerShell checks pass on Windows with 5.1 and 7.
 - [x] Cold/warm benchmark has ten runs of each, p50/p95 and per-check breakdown, with cold p50 at most four minutes or a linked performance issue.
 - [x] Ten real PRs across at least three repositories and both languages have complete independent automated verdicts and a go/no-go conclusion in `docs/evaluation/v0.1.md`.
-- [ ] A fork release of `v0.1.0-rc.1` has six archives, LICENSE/README per archive, matching SHA256SUMS, tagged installers and verified provenance.
-- [ ] The RC is marked pre-release and `releases/latest` is unchanged.
-- [ ] Forced asset-upload failure leaves only a draft; rerun replaces that draft, while published releases cannot be modified.
-- [ ] Published Unix installer succeeds on Ubuntu, Alpine and macOS arm64; `rio --version`, `rio doctor` in a fixture repository, and uninstall work.
-- [ ] Published PowerShell installer succeeds on Windows x64 in both shells; version, doctor and uninstall work.
+- [x] A fork release of `v0.1.0-rc.1` has six archives, LICENSE/README per archive, matching SHA256SUMS, tagged installers and verified provenance.
+- [x] The RC is marked pre-release and `releases/latest` is unchanged.
+- [x] Forced asset-upload failure leaves only a draft; rerun replaces that draft, while published releases cannot be modified.
+- [x] Published Unix installer succeeds on Ubuntu, Alpine and macOS arm64; `rio --version`, `rio doctor` in a fixture repository, and uninstall work.
+- [x] Published PowerShell installer succeeds on Windows x64 in both shells; version, doctor and uninstall work.
 - [x] Stable tag is permitted only after the acceptance record is complete and says go.
 
 Local validation completed during implementation is recorded in the OpenSpec task checklist. Platform and published-release evidence must include run URLs, platform/architecture, exact tag and commit, and observed results here before the corresponding gate is checked.
@@ -54,3 +54,24 @@ Local validation completed during implementation is recorded in the OpenSpec tas
 - At commit `916f34d87b2427e27939550c45bda19cb6a1f5fd`, [release run 41914231087](https://github.com/mctlisboa/rio-v01-validation-20261104/actions/runs/41914231087) passed all platform checks and all six release builds, native installer smoke tests, the ARM Linux QEMU smoke test, exact version/target/commit assertions, and provenance attestation generation.
 - The publisher retried the deliberately failing fourth upload and stopped with `Upload failed; release remains a draft`. Authenticated release-list inspection found exactly one release, draft ID `434473573`, with only `SHA256SUMS`, `install.sh` and `install.ps1`. No published release existed, and `releases/latest` returned HTTP 404, matching the baseline. The observed metadata is saved in [forced-upload-draft.json](release-evidence/forced-upload-draft.json).
 - GitHub's lookup by tag returned 404 for this existing draft, while its authenticated release list included it. The publisher now searches all paginated release-list pages, refuses any matching published release before mutation, and deletes matching leftover drafts. The local GitHub double now reproduces draft tag-lookup 404 and a matching release on a later page. The existing failure/replacement regression failed before this correction and passes afterward.
+
+## Published RC and recovery evidence
+
+- Final tag `v0.1.0-rc.1` points to **`abb02751de7cd95dac021da3f21b02bb89425eef`**. [Recovery release run 41916670430](https://github.com/mctlisboa/rio-v01-validation-20261104/actions/runs/41916670430) passed every check, all six target builds, installer smokes, provenance creation, draft download verification and publication. The corrected publisher deleted the actual leftover draft `434473573` (its API URL now returns 404) and created release `434484343`.
+- Published RC: https://github.com/mctlisboa/rio-v01-validation-20261104/releases/tag/v0.1.0-rc.1. API metadata confirms `draft=false`, `prerelease=true` and exactly **15 assets**: six archives, six attestation bundles, SHA256SUMS and both tagged installers. `releases/latest` still returns HTTP 404. [Published metadata](release-evidence/published-release.json) preserves asset sizes and server digests.
+- Independent download verification checked the exact asset set, every archive checksum, exactly `rio`/`rio.exe`, LICENSE and README per archive, executable Unix modes, and all six cryptographic provenance bundles using checksum-verified GitHub CLI 2.103.3. Each signed statement names the matching archive digest, release workflow, tag and final source commit. [Download verification](release-evidence/download-verification.json) records all target hashes and results. Task 12.4 is complete.
+- The forced-failure repository variable was deleted before the recovery run. No stable release was published; automated real-PR acceptance remains **no-go**, and the stable-tag gate rejects it.
+
+## Published installer evidence
+
+[Installer run 41918223523](https://github.com/mctlisboa/rio-v01-validation-20261104/actions/runs/41918223523) passed every job against the published RC assets using the temporary repository's HTTPS download URL. Task 12.5 is complete.
+
+| Platform | Architecture | Installer and shell | Observed result |
+| --- | --- | --- | --- |
+| Ubuntu 24.04 | x86_64 | install.sh, Bash | Install, exact version/target/commit, JSON doctor in committed fixture, uninstall passed |
+| Alpine 3.21 | x86_64 | install.sh, ash | Published HTTPS install, version, JSON doctor in committed fixture, uninstall passed |
+| macOS 26 | ARM64 | install.sh, Bash | Install, exact version/target/commit, JSON doctor in committed fixture, uninstall passed |
+| Windows 2025 | x86_64 | install.ps1, Windows PowerShell 5.1 | Install, exact version/target/commit, JSON doctor, uninstall passed |
+| Windows 2025 | x86_64 | install.ps1, PowerShell 7 | Install, exact version/target/commit, JSON doctor, uninstall passed |
+
+Downloaded doctor artifacts from all four runner jobs parse as JSON with no blocking problems. Ubuntu's separate Alpine step also passed. [Installer evidence](release-evidence/published-installers.json) records job URLs, observed binary versions and successful steps. All versions report `0.1.0-rc.1` and source commit `abb02751de7cd95dac021da3f21b02bb89425eef`.
