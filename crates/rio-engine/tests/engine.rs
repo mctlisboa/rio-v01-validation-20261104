@@ -1,0 +1,630 @@
+#[path = "../../rio-adapters/tests/common/mod.rs"]
+mod common;
+use common::*;
+use rio_adapters::ProcessSupervisor;
+use rio_core::*;
+use rio_engine::*;
+use rio_git::{GixRepo, Repo, SafeTreeWriter, Selection, select};
+use rio_profile::{ProfileLoader, ResolvedProfile};
+use std::{fs, path::Path, time::Duration};
+use tokio_util::sync::CancellationToken;
+
+fn git(root: &Path, args: &[&str]) {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+fn init(root: &Path) {
+    git(root, &["init", "-b", "main"]);
+    git(root, &["config", "user.email", "rio@example.invalid"]);
+    git(root, &["config", "user.name", "Rio Test"]);
+}
+fn profile(root: &Path, budget: &str, baseline: bool) -> ResolvedProfile {
+    let path = root.join("profile.yaml");
+    fs::write(&path,format!("version: 1\nname: engine-test\nextends: rio/base\nbudget:\n  fast: {{wall_time: {budget}}}\nsteps:\n  - id: prepare\n    uses: rio/prepare\n  - id: checks\n    uses: rio/checks\n    needs: [prepare]\n    with: {{typecheck: true, lint: false, coverage: false, secrets: true, dependencies: false, baseline: {baseline}}}\n  - id: graph\n    uses: rio/graph\n    needs: [prepare]\n  - id: triage\n    uses: rio/triage\n    needs: [checks, graph]\n  - id: agents\n    uses: rio/agents\n    needs: [triage]\n  - id: verify\n    uses: rio/verify\n    needs: [agents]\n  - id: report\n    uses: rio/report\n    needs: [verify]\n")).unwrap();
+    ProfileLoader::new(Some(root.into()), root.join("config"), root.into())
+        .load(Some(path.to_str().unwrap()))
+        .unwrap()
+}
+fn request(root: &Path, profile: ResolvedProfile) -> ReviewRequest {
+    let repo = GixRepo::discover(root).unwrap();
+    let changes = select(&repo, Selection::WorkingTree).unwrap();
+    ReviewRequest {
+        worktree: root.into(),
+        working: repo.working_tree().unwrap(),
+        changes,
+        profile,
+        cache: CacheOptions::for_repository(root),
+        parallelism: 2,
+        output_limit: 1024 * 1024,
+        offline: true,
+    }
+}
+
+#[tokio::test]
+async fn real_typecheck_classifies_cross_file_regressions_existing_errors_and_worsened_occurrences()
+{
+    let original = fixture("ts-sample");
+    if !require_tool(original.join("node_modules/.bin/tsc").exists(), "tsc") {
+        return;
+    }
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    let tree = read_tree(&original);
+    SafeTreeWriter::new(root)
+        .unwrap()
+        .write_tree(&tree)
+        .unwrap();
+    fs::write(root.join(".gitignore"), "node_modules/\n.rio/cache/\n").unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(original.join("node_modules"), root.join("node_modules")).unwrap();
+    #[cfg(windows)]
+    std::os::windows::fs::symlink_dir(original.join("node_modules"), root.join("node_modules"))
+        .unwrap();
+    init(root);
+    let profile = profile(root, "60s", true);
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "base"]);
+    fs::write(
+        root.join("src/math.ts"),
+        "export function format(value: string): string {\n  return value.toUpperCase();\n}\n",
+    )
+    .unwrap();
+    fs::write(root.join("src/duplicate.ts"),"export function duplicate(value?: {name: string}): string {\n  const first = value.name;\n  const second = value.name;\n  return first + second;\n}\n").unwrap();
+    let (sender, mut events) = tokio::sync::mpsc::unbounded_channel();
+    let report = review(
+        request(root, profile.clone()),
+        ProcessSupervisor::default(),
+        CancellationToken::new(),
+        Some(sender),
+    )
+    .await
+    .unwrap();
+    assert!(
+        report
+            .findings
+            .iter()
+            .any(|finding| finding.location.path == "src/caller.ts" && finding.state == State::New),
+        "{:#?}",
+        report.checks
+    );
+    assert!(
+        report
+            .findings
+            .iter()
+            .any(|finding| finding.location.path == "src/existing.ts"
+                && finding.state == State::PreExisting)
+    );
+    let duplicate = report
+        .findings
+        .iter()
+        .find(|finding| finding.location.path == "src/duplicate.ts")
+        .unwrap();
+    assert_eq!(duplicate.state, State::Worsened);
+    assert!(
+        duplicate
+            .locations
+            .iter()
+            .any(|location| location.occurrence_state == OccurrenceState::New)
+    );
+    assert!(
+        duplicate
+            .locations
+            .iter()
+            .any(|location| location.occurrence_state == OccurrenceState::PreExisting)
+    );
+    assert_eq!(
+        exit_code(
+            &report,
+            &profile.profile.fail_on.compile().unwrap(),
+            ExitContext::default()
+        ),
+        1
+    );
+    assert_eq!(
+        report
+            .deferred
+            .iter()
+            .map(|step| step.step.as_str())
+            .collect::<Vec<_>>(),
+        ["triage", "agents", "verify"]
+    );
+    assert!(
+        report
+            .footer
+            .notes
+            .iter()
+            .any(|note| note.contains("not network-isolated"))
+    );
+    let mut received = Vec::new();
+    while let Some(event) = events.recv().await {
+        received.push(event);
+    }
+    assert!(matches!(received.first(),Some(ReviewEvent::StepStarted {step}) if step=="prepare"));
+    assert!(matches!(received.last(), Some(ReviewEvent::Done { .. })));
+    let schema: serde_json::Value =
+        serde_json::from_str(include_str!("../../../schemas/report-v1.json")).unwrap();
+    let validator = jsonschema::validator_for(&schema).unwrap();
+    let document = serde_json::to_value(&report).unwrap();
+    assert!(
+        validator.is_valid(&document),
+        "{:?}",
+        validator
+            .iter_errors(&document)
+            .map(|error| error.to_string())
+            .collect::<Vec<_>>()
+    );
+    let second = review(
+        request(root, profile),
+        ProcessSupervisor::default(),
+        CancellationToken::new(),
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(report.review.id, second.review.id);
+    assert_ne!(report.review.run_id, second.review.run_id);
+    assert!(
+        second
+            .checks
+            .iter()
+            .any(|check| check.version == Version::Base && check.cached)
+    );
+    assert!(
+        second
+            .footer
+            .notes
+            .iter()
+            .any(|note| note.contains("baseline cached"))
+    );
+    let directory = root.join(".rio/cache").join(report.review.id.unwrap());
+    assert_eq!(fs::read_dir(directory.join("runs")).unwrap().count(), 2);
+    assert!(directory.join("latest").exists());
+}
+
+#[cfg(unix)]
+fn slow_fixture(root: &Path, budget: &str) -> ResolvedProfile {
+    use std::os::unix::fs::PermissionsExt;
+    fs::write(
+        root.join("package.json"),
+        r#"{"name":"fake","version":"1.0.0","dependencies":{}}"#,
+    )
+    .unwrap();
+    let lock =
+        r#"{"name":"fake","lockfileVersion":3,"packages":{"":{"name":"fake","version":"1.0.0"}}}"#;
+    fs::write(root.join("package-lock.json"), lock).unwrap();
+    fs::create_dir_all(root.join("node_modules/.bin")).unwrap();
+    fs::write(root.join("node_modules/.package-lock.json"), lock).unwrap();
+    let code = format!(
+        "#!/usr/bin/python3\nimport sys,subprocess,time,pathlib\nif '--version' in sys.argv:\n print('Version 5.7.3');sys.exit(0)\nchild=subprocess.Popen([sys.executable,'-c','import time;time.sleep(3600)'])\npathlib.Path({:?}).write_text(str(child.pid))\ntime.sleep(3600)\n",
+        root.join("worker.pid").to_str().unwrap()
+    );
+    fs::write(root.join("node_modules/.bin/tsc"), code).unwrap();
+    fs::set_permissions(
+        root.join("node_modules/.bin/tsc"),
+        fs::Permissions::from_mode(0o700),
+    )
+    .unwrap();
+    fs::write(root.join("tsconfig.json"), "{}").unwrap();
+    fs::write(root.join("a.ts"), "export const value = 1;\n").unwrap();
+    fs::write(
+        root.join(".gitignore"),
+        "node_modules/\n.rio/cache/\nworker.pid\n",
+    )
+    .unwrap();
+    init(root);
+    let profile = profile(root, budget, false);
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "base"]);
+    fs::write(root.join("a.ts"), "export const value = 2;\n").unwrap();
+    profile
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn timeout_terminates_workers_keeps_other_checks_and_marks_incomplete() {
+    let temp = tempfile::tempdir().unwrap();
+    let profile = slow_fixture(temp.path(), "10s");
+    let report = review(
+        request(temp.path(), profile.clone()),
+        ProcessSupervisor::default(),
+        CancellationToken::new(),
+        None,
+    )
+    .await
+    .unwrap();
+    assert!(
+        report.checks.iter().any(|check| matches!(
+            check.outcome,
+            CheckOutcome::Cancelled {
+                reason: CancellationReason::Timeout,
+                ..
+            }
+        )),
+        "{:#?}",
+        report.checks
+    );
+    assert!(
+        report
+            .checks
+            .iter()
+            .any(|check| check.kind == CheckKind::Secrets
+                && matches!(check.outcome, CheckOutcome::Passed { .. })),
+        "{:#?}",
+        report.checks
+    );
+    assert_eq!(
+        exit_code(
+            &report,
+            &profile.profile.fail_on.compile().unwrap(),
+            ExitContext::default()
+        ),
+        4
+    );
+    let pid: u32 = fs::read_to_string(temp.path().join("worker.pid"))
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert!(!Path::new("/proc").join(pid.to_string()).exists());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn cancellation_records_interrupted_checks_and_returns_a_partial_report() {
+    let temp = tempfile::tempdir().unwrap();
+    let profile = slow_fixture(temp.path(), "60s");
+    let cancellation = CancellationToken::new();
+    let signal = cancellation.clone();
+    let input = request(temp.path(), profile.clone());
+    let path = temp.path().join("worker.pid");
+    let cancel = tokio::spawn(async move {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while !path.exists() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        signal.cancel();
+    });
+    let report = review(input, ProcessSupervisor::default(), cancellation, None)
+        .await
+        .unwrap();
+    cancel.await.unwrap();
+    assert_eq!(report.status, ReportStatus::Partial);
+    assert!(report.checks.iter().any(|check| matches!(
+        check.outcome,
+        CheckOutcome::Cancelled {
+            reason: CancellationReason::Interrupted,
+            ..
+        }
+    )));
+    assert_eq!(
+        exit_code(
+            &report,
+            &profile.profile.fail_on.compile().unwrap(),
+            ExitContext::default()
+        ),
+        4
+    );
+    let pid: u32 = fs::read_to_string(temp.path().join("worker.pid"))
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert!(!Path::new("/proc").join(pid.to_string()).exists());
+}
+
+#[cfg(unix)]
+fn diagnostic_fixture(root: &Path, lint: bool) -> ResolvedProfile {
+    use std::os::unix::fs::PermissionsExt;
+    fs::create_dir_all(root.join("node_modules/.bin")).unwrap();
+    fs::write(root.join("node_modules/.bin/tsc"),"#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'Version 5.7.3'; exit 0; fi\necho \"a.ts(1,7): error TS2322: Type 'string' is not assignable to type 'number'.\"\nexit 2\n").unwrap();
+    fs::write(root.join("node_modules/.bin/eslint"),"#!/usr/bin/python3\nimport sys,json,os\nif '--version' in sys.argv: print('v9.18.0');sys.exit(0)\nprint(json.dumps([dict(filePath=os.path.abspath(path),messages=[dict(ruleId='no-unused-vars',severity=2,message='unused value',line=1,column=7)]) for path in sys.argv[1:] if path.endswith('.ts')]))\nsys.exit(1)\n").unwrap();
+    for tool in ["tsc", "eslint"] {
+        fs::set_permissions(
+            root.join("node_modules/.bin").join(tool),
+            fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+    }
+    let package = r#"{"name":"fixture","version":"1.0.0","dependencies":{"example":"1.0.0"}}"#;
+    let lock = r#"{"lockfileVersion":3,"packages":{"":{"name":"fixture","version":"1.0.0","dependencies":{"example":"1.0.0"}},"node_modules/example":{"name":"example","version":"1.0.0"}}}"#;
+    fs::write(root.join("package.json"), package).unwrap();
+    fs::write(root.join("package-lock.json"), lock).unwrap();
+    fs::write(root.join("node_modules/.package-lock.json"), lock).unwrap();
+    fs::create_dir_all(root.join("node_modules/example")).unwrap();
+    fs::write(
+        root.join("node_modules/example/package.json"),
+        "{\"name\":\"example\",\"version\":\"1.0.0\"}",
+    )
+    .unwrap();
+    fs::write(root.join("tsconfig.json"), "{}").unwrap();
+    fs::write(root.join("eslint.config.js"), "export default [];").unwrap();
+    for path in ["a.ts", "b.ts"] {
+        fs::write(root.join(path), "const x:number='a';\n").unwrap();
+    }
+    fs::write(root.join(".gitignore"), "node_modules/\n.rio/cache/\n").unwrap();
+    init(root);
+    let mut profile = profile(root, "60s", true);
+    let step = profile
+        .profile
+        .steps
+        .iter_mut()
+        .find(|s| s.id == "checks")
+        .unwrap();
+    step.options["typecheck"] = serde_json::json!(!lint);
+    step.options["lint"] = serde_json::json!(lint);
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "base"]);
+    profile
+}
+#[cfg(unix)]
+#[tokio::test]
+async fn lint_baseline_cache_is_specific_to_changed_targets() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    let profile = diagnostic_fixture(root, true);
+    fs::write(root.join("a.ts"), "const x:number='b';\n").unwrap();
+    let first = review(
+        request(root, profile.clone()),
+        ProcessSupervisor::default(),
+        CancellationToken::new(),
+        None,
+    )
+    .await
+    .unwrap();
+    assert!(
+        first
+            .checks
+            .iter()
+            .any(|c| c.kind == CheckKind::Lint && c.version == Version::Base && !c.cached)
+    );
+    git(root, &["checkout", "--", "a.ts"]);
+    fs::write(root.join("b.ts"), "const x:number='b';\n").unwrap();
+    let second = review(
+        request(root, profile.clone()),
+        ProcessSupervisor::default(),
+        CancellationToken::new(),
+        None,
+    )
+    .await
+    .unwrap();
+    let baseline = second
+        .checks
+        .iter()
+        .find(|c| c.kind == CheckKind::Lint && c.version == Version::Base)
+        .unwrap();
+    assert!(!baseline.cached);
+    assert!(
+        baseline
+            .outcome
+            .details()
+            .findings
+            .iter()
+            .all(|f| f.location.path == "b.ts")
+    );
+    let third = review(
+        request(root, profile),
+        ProcessSupervisor::default(),
+        CancellationToken::new(),
+        None,
+    )
+    .await
+    .unwrap();
+    assert!(
+        third
+            .checks
+            .iter()
+            .any(|c| c.kind == CheckKind::Lint && c.version == Version::Base && c.cached)
+    );
+}
+#[cfg(unix)]
+#[tokio::test]
+async fn changed_lockfile_and_trusted_dependencies_disable_baseline_classification() {
+    for trusted in [false, true] {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        let mut profile = diagnostic_fixture(root, false);
+        fs::write(root.join("a.ts"), "const x:number='b';\n").unwrap();
+        if trusted {
+            fs::remove_file(root.join("package-lock.json")).unwrap();
+            profile
+                .profile
+                .steps
+                .iter_mut()
+                .find(|s| s.id == "checks")
+                .unwrap()
+                .options["trust_installed_dependencies"] = serde_json::json!(true);
+        } else {
+            // Model a lockfile update followed by a matching installation. The base needs v1.
+            for path in [
+                "package.json",
+                "package-lock.json",
+                "node_modules/.package-lock.json",
+                "node_modules/example/package.json",
+            ] {
+                let content = fs::read_to_string(root.join(path))
+                    .unwrap()
+                    .replace("1.0.0", "2.0.0");
+                fs::write(root.join(path), content).unwrap();
+            }
+        }
+        let report = review(
+            request(root, profile),
+            ProcessSupervisor::default(),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+        let finding = report
+            .findings
+            .iter()
+            .find(|f| f.rule_id == "typecheck/tsc/TS2322")
+            .unwrap_or_else(|| panic!("{:#?}", report.checks));
+        assert_eq!(finding.state, State::Unclassified);
+        assert!(
+            report
+                .footer
+                .notes
+                .iter()
+                .any(|note| note.contains(if trusted {
+                    "dependencies_trusted"
+                } else {
+                    "baseline_failed"
+                }))
+        );
+        assert!(!report.checks.iter().any(|c| c.version == Version::Base));
+    }
+}
+#[cfg(unix)]
+#[tokio::test]
+async fn concurrent_reviews_keep_separate_records_and_build_one_baseline() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    let profile = diagnostic_fixture(root, false);
+    fs::write(root.join("a.ts"), "const x:number='b';\n").unwrap();
+    let first = request(root, profile.clone());
+    let second = request(root, profile);
+    let (first, second) = tokio::join!(
+        review(
+            first,
+            ProcessSupervisor::default(),
+            CancellationToken::new(),
+            None
+        ),
+        review(
+            second,
+            ProcessSupervisor::default(),
+            CancellationToken::new(),
+            None
+        )
+    );
+    let first = first.unwrap();
+    let second = second.unwrap();
+    assert_eq!(first.review.id, second.review.id);
+    assert_ne!(first.review.run_id, second.review.run_id);
+    let bases: Vec<_> = first
+        .checks
+        .iter()
+        .chain(&second.checks)
+        .filter(|check| check.version == Version::Base)
+        .collect();
+    assert_eq!(bases.len(), 2);
+    assert_eq!(bases.iter().filter(|check| check.cached).count(), 1);
+    for report in [&first, &second] {
+        let path = root
+            .join(".rio/cache")
+            .join(report.review.id.as_ref().unwrap())
+            .join("runs")
+            .join(report.review.run_id.as_ref().unwrap());
+        let persisted: Report =
+            serde_json::from_slice(&fs::read(path.join("report.json")).unwrap()).unwrap();
+        assert_eq!(&persisted, report);
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn linked_workspace_source_edit_disables_the_importing_roots_baseline() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    let profile = diagnostic_fixture(root, false);
+    let lock=serde_json::json!({"lockfileVersion":3,"packages":{"":{"dependencies":{"shared":"file:packages/shared"}},"packages/shared":{"name":"shared","version":"1.0.0"},"node_modules/shared":{"resolved":"packages/shared","link":true}}}).to_string();
+    fs::write(root.join("package-lock.json"), &lock).unwrap();
+    fs::write(root.join("node_modules/.package-lock.json"), &lock).unwrap();
+    fs::write(
+        root.join("package.json"),
+        "{\"dependencies\":{\"shared\":\"file:packages/shared\"}}",
+    )
+    .unwrap();
+    fs::remove_dir_all(root.join("node_modules/example")).unwrap();
+    fs::create_dir_all(root.join("packages/shared/src")).unwrap();
+    fs::write(
+        root.join("packages/shared/package.json"),
+        "{\"name\":\"shared\",\"version\":\"1.0.0\"}",
+    )
+    .unwrap();
+    fs::write(
+        root.join("packages/shared/src/shared.ts"),
+        "export const a=1;\n",
+    )
+    .unwrap();
+    std::os::unix::fs::symlink("../packages/shared", root.join("node_modules/shared")).unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "workspace link"]);
+    fs::write(
+        root.join("packages/shared/src/shared.ts"),
+        "export const a=2;\n",
+    )
+    .unwrap();
+    fs::write(root.join("a.ts"), "const x:number='b';\n").unwrap();
+    let report = review(
+        request(root, profile),
+        ProcessSupervisor::default(),
+        CancellationToken::new(),
+        None,
+    )
+    .await
+    .unwrap();
+    assert!(
+        report
+            .findings
+            .iter()
+            .any(|f| f.rule_id == "typecheck/tsc/TS2322" && f.state == State::Unclassified),
+        "{:#?}",
+        report.checks
+    );
+    assert!(
+        report
+            .footer
+            .notes
+            .iter()
+            .any(|note| note.contains("baseline_failed") && note.contains("packages/shared"))
+    );
+    assert!(!report.checks.iter().any(|c| c.version == Version::Base));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn raw_output_retention_can_be_disabled_without_losing_findings_or_offline_notice() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    let profile = diagnostic_fixture(root, false);
+    fs::write(root.join("a.ts"), "const x:number='b';\n").unwrap();
+    let mut input = request(root, profile);
+    input.cache.retain_raw_output = false;
+    let report = review(
+        input,
+        ProcessSupervisor::default(),
+        CancellationToken::new(),
+        None,
+    )
+    .await
+    .unwrap();
+    assert!(!report.findings.is_empty());
+    assert!(
+        report
+            .footer
+            .notes
+            .iter()
+            .any(|note| note.contains("not network-isolated"))
+    );
+    let path = root
+        .join(".rio/cache")
+        .join(report.review.id.unwrap())
+        .join("runs")
+        .join(report.review.run_id.unwrap())
+        .join("checks/typecheck/%2E/head");
+    assert!(path.join("findings.json").exists());
+    assert!(!path.join("stdout.txt").exists());
+    assert!(!path.join("stderr.txt").exists());
+}

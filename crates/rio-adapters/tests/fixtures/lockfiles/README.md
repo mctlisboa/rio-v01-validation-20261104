@@ -1,0 +1,3 @@
+JavaScript lockfiles are recorded from package-manager resolution of debug 4.4.3, is-number 7.0.0, dev @types/ms 2.1.0, and optional fsevents 2.3.3. npm 2/3, pnpm 10.20.0, Yarn 1.22.22 and Yarn 4.10.3 are exercised. Additional focused graph fixtures cover workspace and nested resolution behavior.
+
+Python lockfiles are recorded from uv 0.13.7, Poetry 2.5.1, and Pipenv 2026.10.5 on Python 3.12.3 using `python-pyproject.toml` (requests 2.32.3, Windows-only colorama 0.4.6, dev iniconfig 2.0.0, and optional security idna 3.10). `requirements-recorded.txt` is `uv export --frozen --no-dev --no-hashes`. Regenerate with the named managers; resolution of transitive ranges can change with the package index. These files contain public package metadata only.

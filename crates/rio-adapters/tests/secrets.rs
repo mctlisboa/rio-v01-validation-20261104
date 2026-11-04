@@ -1,0 +1,155 @@
+use rio_adapters::{redact, retained_raw, scan_secrets, shannon_entropy};
+use rio_core::{EvidenceLevel, State};
+use rio_git::{ChangeSet, Selection, Tree, TreeEntry, diff};
+
+fn cases() -> Vec<(&'static str, String, &'static str)> {
+    vec![
+        (
+            "aws-access-key",
+            format!("AKIA{}", "A1B2C3D4E5F6G7H8"),
+            "AKIA123",
+        ),
+        (
+            "github-token",
+            format!("ghp_{}", "Ab1".repeat(12)),
+            "ghp_short",
+        ),
+        (
+            "gitlab-token",
+            format!("glpat-{}", "a1b2C".repeat(4)),
+            "glpat-short",
+        ),
+        (
+            "slack-token",
+            format!("xoxb-{}", "1234567890-abcdefghijk"),
+            "xoxb-short",
+        ),
+        (
+            "stripe-key",
+            format!("sk_live_{}", "Ab1".repeat(8)),
+            "sk_test_1234",
+        ),
+        (
+            "private-key",
+            "-----BEGIN PRIVATE KEY-----\nYXNkZmdoaWprbG1ub3BxcnN0dXY=\n-----END PRIVATE KEY-----"
+                .into(),
+            "-----BEGIN PUBLIC KEY-----\npublic\n-----END PUBLIC KEY-----",
+        ),
+        (
+            "connection-string",
+            "postgresql://user:reallysecret@example.invalid/db".into(),
+            "postgresql://user@example.invalid/db",
+        ),
+    ]
+}
+
+fn changes(base: &str, head: &str) -> ChangeSet {
+    let tree = |text: &str| {
+        Tree::from([(
+            "a.ts".into(),
+            TreeEntry {
+                mode: 0o100644,
+                object_id: String::new(),
+                content: text.as_bytes().to_vec(),
+            },
+        )])
+    };
+    ChangeSet {
+        selection: Selection::WorkingTree,
+        base_id: "base".into(),
+        head_id: "head".into(),
+        base: tree(base),
+        head: tree(head),
+    }
+}
+
+#[test]
+fn every_catalog_pattern_has_positive_negative_and_redaction_checks() {
+    for (pattern, value, negative) in cases() {
+        let changes = changes("", &value);
+        let diff = diff(&changes, &[]).unwrap();
+        let findings = scan_secrets(&diff, &changes.head).unwrap();
+        assert_eq!(findings.len(), 1, "{pattern}");
+        assert_eq!(findings[0].rule_id, format!("secret/{pattern}"));
+        assert_eq!(findings[0].evidence_level, EvidenceLevel::StaticProven);
+        assert_eq!(findings[0].state, State::New);
+        let serialized = serde_json::to_string(&findings).unwrap();
+        assert!(!serialized.contains(&value), "{pattern}");
+        assert!(!redact(&value).contains(&value), "{pattern}");
+        assert_eq!(redact(negative), negative, "{pattern}");
+    }
+}
+
+#[test]
+fn entropy_requires_a_secret_name_and_sufficient_entropy() {
+    let value = "aB3dE5gH7jK9mN1pQ4sT6vW8xY0zR2";
+    assert!(shannon_entropy(value) > 3.5);
+    assert_eq!(shannon_entropy("aaaaaaaaaaaaaaaaaaaa"), 0.0);
+    assert_eq!(shannon_entropy(""), 0.0);
+    for name in ["api_key", "SECRET", "password", "access_token"] {
+        let text = format!("\"{name}\": \"{value}\"");
+        assert!(!redact(&text).contains(value), "{name}");
+    }
+    for separator in ["=", ":"] {
+        let text = format!("api_key {separator} {value}");
+        assert!(!redact(&text).contains(value));
+    }
+    for text in [
+        format!("ordinary = '{value}'"),
+        "secret = 'aaaaaaaaaaaaaaaaaaaaaaaa'".into(),
+        "token = 'short'".into(),
+        "file_secret_settings: PydanticBaseSettingsSource".into(),
+        "thread_token = _ASYNC_CALLING_THREAD.set(1)".into(),
+        "scs_token = _ASYNC_CALLING_STACK.set(frame)".into(),
+        "access_token = SOME_EXTERNAL_TOKEN_VALUE".into(),
+    ] {
+        assert_eq!(redact(&text), text);
+    }
+}
+
+#[test]
+fn hunk_membership_distinguishes_new_and_pre_existing_credentials() {
+    let first = cases()[0].1.clone();
+    let second = cases()[1].1.clone();
+    let changes = changes(
+        &format!("old='{first}'\nunchanged\n"),
+        &format!("old='{first}'\nunchanged\nnew='{second}'\n"),
+    );
+    let findings = scan_secrets(&diff(&changes, &[]).unwrap(), &changes.head).unwrap();
+    assert_eq!(findings.len(), 2);
+    assert_eq!(findings[0].state, State::PreExisting);
+    assert_eq!(findings[1].state, State::New);
+    assert_eq!(findings[1].location.line_start, 3);
+}
+
+#[test]
+fn raw_output_is_redacted_before_head_and_tail_truncation_including_multiline_keys() {
+    let values = cases();
+    let raw = values
+        .iter()
+        .map(|(_, value, _)| value.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let stored = String::from_utf8(retained_raw(raw.as_bytes(), 100000)).unwrap();
+    for (_, value, _) in &values {
+        assert!(!stored.contains(value));
+    }
+    let padded = format!("{}\n{}\n{}", "あ".repeat(100), raw, "え".repeat(100));
+    let stored = retained_raw(padded.as_bytes(), 128);
+    assert!(stored.len() <= 128);
+    let stored = String::from_utf8(stored).unwrap();
+    assert!(stored.contains("truncated"));
+    for (_, value, _) in &values {
+        assert!(!stored.contains(value));
+    }
+}
+
+#[test]
+fn output_stopped_mid_credential_is_still_redacted() {
+    let token = "ghp_abcdefghijk";
+    let key = "-----BEGIN PRIVATE KEY-----\nsensitive-key-body-without-an-end-marker";
+    let retained = String::from_utf8(retained_raw(key.as_bytes(), 100000)).unwrap();
+    assert!(!retained.contains("sensitive-key-body"));
+    let retained = String::from_utf8(retained_raw(token.as_bytes(), 100000)).unwrap();
+    assert_eq!(retained, "ghp_[REDACTED]");
+}
