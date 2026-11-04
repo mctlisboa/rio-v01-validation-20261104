@@ -16,6 +16,7 @@ Rio does not exist yet: the repository holds only a PRD and a TRD. The PRD's rel
 - **Lazy impact graph**: Tree-sitter symbol tables for both versions, seed set from changed hunks, N-hop expansion through scope-filtered identifier search, base/head/delta slices written as JSON. LSP-backed reference resolution is an optional adapter capability not implemented by the v0.1 built-ins.
 - **Findings and report**: a single finding model with evidence levels, stable identity `blake3(rule_id | normalized_location | trigger_hash)`, one finding per root cause, suppression application, and terminal, Markdown and JSON renderers. The report ends with a footer of what could not be analyzed. Results are cached under `.rio/cache/<review-id>/`.
 - **`rio doctor`** (local subset): reports detected languages, tool availability per adapter capability, profile validity and git state.
+- **Distribution**: a tag-triggered release workflow publishing archives for Linux (musl), macOS and Windows on x86_64 and arm64 with `SHA256SUMS` and build provenance attestations, plus `install.sh` (POSIX `sh`, Linux and macOS) and `install.ps1` (Windows PowerShell 5.1 and PowerShell 7+) that verify checksums and install without administrator rights.
 
 Nothing is breaking: there is no prior behavior.
 
@@ -32,15 +33,16 @@ Nothing is breaking: there is no prior behavior.
 - `impact-graph`: lazy graph construction, node and edge model, confidence marking, slice output.
 - `findings`: finding model, evidence levels, stable identity, root-cause grouping, regression vs pre-existing state, suppression.
 - `review-report`: terminal, Markdown and JSON rendering, section order, ordering within sections, footer, result cache.
+- `distribution`: release artifacts per target with checksums and provenance, the Unix `install.sh` and Windows `install.ps1` installers, and their download source override.
 
 ### Modified Capabilities
 None. There are no existing specs.
 
 ## Impact
 
-- **New code**: everything under `crates/`, `modules/`, `schemas/`, and a `tests/fixtures/` directory with small TypeScript and Python sample repositories carrying seeded issues.
+- **New code**: everything under `crates/`, `modules/`, `schemas/`, `scripts/install.sh`, `scripts/install.ps1`, the release workflow under `.github/workflows/`, and a `tests/fixtures/` directory with small TypeScript and Python sample repositories carrying seeded issues.
 - **External tools invoked on the user's machine** (never bundled): `tsc`, `eslint`, `vitest`/`jest`, `c8`, `pyright` or `mypy`, `ruff`, `pytest`, `coverage`. Each is optional; absence degrades to `check_skipped`.
 - **Network**: one outbound call to the OSV batch API for dependency audit, disabled by `--offline`. No Rio backend, no model provider.
 - **Dependencies** (Rust): `clap`, `serde`, `serde_yaml`, `serde_json`, `jsonschema`, `gix` (fallback `git2`), `blake3`, `tree-sitter` with the TypeScript and Python grammars, `tokio`, `reqwest`, `indicatif`, `globset`, `ignore`.
 - **Contracts fixed for later changes**: profile schema v1 (including `fail_on`, which the TRD mentions but omits from its schema listing; this change adds it as a top-level key), module manifest v1, finding JSON v1, snapshot format, cache layout. v0.2 extends these; it must not break them.
-- **Deferred to later changes**: endpoint, `rio init`/`deploy`/`upgrade`, intent agent, agents, hypothesis board, verifier, consolidation across runs, PR mode, SARIF, feedback, `--since-last`, LSP reference resolution, third-party module registry, GitHub Actions runner.
+- **Deferred to later changes**: code signing and macOS notarization, Homebrew tap, `cargo install rio-cli` from crates.io, endpoint, `rio init`/`deploy`/`upgrade`, intent agent, agents, hypothesis board, verifier, consolidation across runs, PR mode, SARIF, feedback, `--since-last`, LSP reference resolution, third-party module registry, GitHub Actions runner.

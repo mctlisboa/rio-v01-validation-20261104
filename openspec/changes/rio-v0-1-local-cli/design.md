@@ -135,6 +135,16 @@ Progress goes to standard error through `indicatif`; findings go to standard out
 - Tool-dependent tests detect the tool at runtime and are marked skipped with a reason when absent; CI installs Node, pnpm, Python, `pyright`, `mypy`, `ruff`, `coverage` so they always run there.
 - Recorded tool outputs (one fixture per supported tool version) drive parser tests offline.
 
+### D15. Distribution: GitHub Releases, checksums, provenance, two installer scripts
+
+A `release.yml` workflow runs on `v*` tags. It reuses the CI test job, then builds the six targets in a matrix: Linux with `cross` against musl so one static binary covers glibc and musl distributions, macOS and Windows natively on GitHub-hosted runners for both architectures. It packages the archives, writes `SHA256SUMS`, attests each archive with `actions/attest-build-provenance`, and only then creates the release and uploads every asset in one final job, so a failed target publishes nothing. The release attaches the installer scripts from the tagged commit, so `https://github.com/pixelinfinito/rio/releases/latest/download/install.sh` always matches the binaries next to it, and `releases/download/v<x>/install.sh` pins a version.
+
+Trust model: HTTPS to GitHub plus the SHA-256 in `SHA256SUMS` detects corrupted or swapped archives on the same release. It does not protect against a compromised release, which is what signing would add; provenance attestations give users who want that assurance a check (`gh attestation verify <archive> --repo pixelinfinito/rio`, documented in the README) without Rio managing signing keys. Code signing, Apple notarization and a Homebrew tap are deferred. Binaries fetched with `curl` or `Invoke-WebRequest` are not quarantined by Gatekeeper and do not carry the Mark of the Web, so unsigned binaries run without prompts on these install paths.
+
+Installers stay small and dependency-free. `install.sh` is POSIX `sh` because `curl | sh` runs under `dash` on Debian and Ubuntu, and it never edits startup files, because there is no safe way to choose between shells. `install.ps1` does update the user `PATH`, because Windows has no startup-file convention and the user registry `PATH` is the normal mechanism; `-NoModifyPath` opts out. Both default to per-user directories, so neither needs elevation. `RIO_DOWNLOAD_BASE` lets the release workflow test the installers against the just-built archives in a local directory before publishing, and serves corporate mirrors.
+
+Alternatives: `cargo-dist`, which generates all of this. Rejected for v0.1 because its generated installers and workflow would then be the contract, and the trust and PATH behavior above should be explicit and reviewed. It can replace the hand-written workflow later if the behavior is kept. Windows remains best effort for review features (D3), but its binary and installer are built and tested like the others.
+
 ## Risks / Trade-offs
 
 - [`gix` lacks an operation, for example untracked-file enumeration with ignore rules] → `Repo` trait (D2) allows a `git2` implementation; the `ignore` crate already handles ignore rules for the walk.
@@ -150,6 +160,8 @@ Progress goes to standard error through `indicatif`; findings go to standard out
 - [Tool output formats drift between versions] → machine-readable formats where available (D4); parser fixtures per version; `unparseable_output` degradation.
 - [Secrets heuristic false positives in fixtures and tests] → path suppressions in the profile; the catalog carries per-pattern test cases.
 - [Symlinks and long paths on Windows] → Windows is best effort in v0.1; baseline falls back to `baseline_failed` when symlinking fails.
+- [`curl | sh` and `irm | iex` run a script the user has not read] → scripts are short, versioned with the release, and the README shows the download-inspect-run alternative; checksums cover the binary, not the script.
+- [Unsigned binaries] → SHA-256 checksums plus provenance attestations; signing and notarization deferred, with no change to archive names or installer behavior when they are added.
 - [Scope creep toward v0.2] → anything requiring a model or endpoint is rejected at the CLI with an explicit message, and the deferred list in the footer is the only place it appears.
 
 ## Migration Plan
