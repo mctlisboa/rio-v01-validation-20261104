@@ -3,7 +3,7 @@
 A checked box records actual evidence. Source code or a workflow definition alone does not establish that a release ran successfully.
 
 - [ ] CI passes on the first pushed implementation commit, including a negative check with Ruff removed under `RIO_REQUIRE_TOOLS=1`.
-- [ ] Unix installer checks pass on Ubuntu and macOS; PowerShell checks pass on Windows with 5.1 and 7.
+- [x] Unix installer checks pass on Ubuntu and macOS; PowerShell checks pass on Windows with 5.1 and 7.
 - [x] Cold/warm benchmark has ten runs of each, p50/p95 and per-check breakdown, with cold p50 at most four minutes or a linked performance issue.
 - [x] Ten real PRs across at least three repositories and both languages have complete independent automated verdicts and a go/no-go conclusion in `docs/evaluation/v0.1.md`.
 - [ ] A fork release of `v0.1.0-rc.1` has six archives, LICENSE/README per archive, matching SHA256SUMS, tagged installers and verified provenance.
@@ -23,6 +23,7 @@ Local validation completed during implementation is recorded in the OpenSpec tas
 - Release publisher: nine fake-GitHub lifecycle/package tests passed, including forced upload failure, draft replacement, published-release refusal, exact asset/checksum membership, corrupt download and failed provenance verification.
 - Ten real PR records from Immer, pydantic-settings and structlog are complete. Independent **automated** aggregate verdict: **no-go**, with 1 useful/9 not-useful assessments, no true positives and two reproduced missed regressions. The record-only checker passes; the stable-release checker correctly rejects no-go.
 - External validation repository authorized by the user: https://github.com/mctlisboa/rio-v01-validation-20261104. Release candidates and CI use this temporary public repository; no upstream stable release is authorized or claimed.
+- Process-supervision task 5.2 is verified on Linux and Windows by [CI 41911107532](https://github.com/mctlisboa/rio-v01-validation-20261104/actions/runs/41911107532), and on macOS 26 ARM by [its macOS job](https://github.com/mctlisboa/rio-v01-validation-20261104/actions/runs/41911107532/job/126858578168): timeout, cancellation, output-limit handling, redaction, spawn failure, and Unix signal-resistant descendant cleanup all passed. The run's unrelated failures are documented below.
 
 ## First pushed CI run
 
@@ -41,3 +42,9 @@ Local validation completed during implementation is recorded in the OpenSpec tas
 - The first RC workflow's Windows timeout fixture expired before its PID file was created, despite passing on the same commit in [branch CI 41909872295](https://github.com/mctlisboa/rio-v01-validation-20261104/actions/runs/41909872295). The Windows timeout budget is now 15 seconds, with a 30-second readiness budget for the cancellation fixture. Neither changes the one-hour worker lifetime or the requirement to confirm descendant termination. All six Linux supervision tests pass after this fixture correction.
 - That RC attempt also exposed canonical-path mismatches in workspace and Python editable dependency detection on macOS (`/var` versus `/private/var`). Link discovery and compatibility now compare canonical roots. Three existing compatibility tests use an explicitly aliased worktree so Linux exercises the same case; all 13 compatibility tests pass locally. No assets were built or published by this failed attempt.
 - [CI run 41911107532](https://github.com/mctlisboa/rio-v01-validation-20261104/actions/runs/41911107532) passed Ubuntu and Windows, including the adjusted timeout test. macOS passed dependency-link checks, supervision and end-to-end fixture tests, but exposed an ESLint target alias and two fixture assumptions. A separate Linux reproduction confirmed ESLint reported `File ignored because outside of base path` for an aliased absolute target. Commands now resolve the disposable root before constructing cwd and targets; the real-tool test explicitly uses an alias. Doctor's fixture compares canonical paths, and the case-only rename fixture uses `git mv -f` to update the index on case-insensitive filesystems.
+
+## Corrected platform CI
+
+- Commit `d07dfa8f337333348db6622044b4f906c590625c`: [CI run 41912745695](https://github.com/mctlisboa/rio-v01-validation-20261104/actions/runs/41912745695) passed Ubuntu 24.04 x86_64, macOS 26 ARM64 and Windows 2025 x86_64. Both Unix jobs passed fmt, Clippy, the full workspace suite with required tools, fixture suites, the missing-Ruff negative check, ShellCheck, ten installer tests, nine release lifecycle tests, the automated acceptance completeness check and profile-reference freshness. Windows passed supervision, CLI build, ScriptAnalyzer, and installer checks in PowerShell 7 and 5.1.
+- The macOS installer test created and mounted a separate HFS+ disk image and verified successful installation there. Windows used a temporary VHD; Linux verified rollback on a separate noexec filesystem. Task 12.3 is complete.
+- Task 10.3 remains unchecked because the historical first implementation push failed. Corrected CI is green; treating that as acceptance of the first-push requirement awaits the user's decision. The original failures remain recorded above.
