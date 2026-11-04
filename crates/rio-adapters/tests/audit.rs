@@ -40,6 +40,9 @@ impl Server {
                     }
                     Err(error) => panic!("{error}"),
                 };
+                // macOS inherits the listener's nonblocking mode on accept.
+                // Reads must wait for the client to finish sending the request.
+                stream.set_nonblocking(false).unwrap();
                 stream
                     .set_read_timeout(Some(Duration::from_secs(2)))
                     .unwrap();
