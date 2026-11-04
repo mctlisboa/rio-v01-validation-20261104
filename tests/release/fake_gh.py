@@ -32,7 +32,13 @@ if args[0] == 'api':
     payload = json.loads(Path(args[args.index('--input') + 1]).read_text()) if '--input' in args else None
     call.update(method=method, path=path, payload=payload)
     if method == 'GET':
+        if path.endswith('/releases?per_page=100'):
+            assert '--paginate' in args and '--slurp' in args
+            # Exercise a matching release on a later page, including drafts.
+            response([[], [state['release']] if state['release'] else []])
         if state['release'] is None:
+            finish(1, error='HTTP 404: Not Found')
+        if '/releases/tags/' in path and state['release']['draft']:
             finish(1, error='HTTP 404: Not Found')
         response(state['release'])
     if method == 'DELETE':

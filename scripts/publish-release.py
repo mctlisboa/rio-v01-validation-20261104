@@ -36,13 +36,14 @@ archive_names = {
 expected_assets = archive_names | {name + '.intoto.jsonl' for name in archive_names} | {'SHA256SUMS', 'install.sh', 'install.ps1'}
 if {path.name for path in assets} != expected_assets:
     sys.exit('Expected all six target archives, their attestation bundles, SHA256SUMS and both installers')
-existing = gh('api', f'repos/{REPO}/releases/tags/{TAG}', check=False)
-if existing.returncode == 0:
-    release = json.loads(existing.stdout)
-    if not release['draft']: sys.exit('Refusing to modify a published release')
+existing = json.loads(gh('api', '--paginate', '--slurp', f'repos/{REPO}/releases?per_page=100').stdout)
+# GitHub's tag lookup may return 404 for an authenticated caller's draft.
+# The paginated release list includes drafts and also prevents duplicate drafts.
+matching = [release for page in existing for release in page if release['tag_name'] == TAG]
+if any(not release['draft'] for release in matching):
+    sys.exit('Refusing to modify a published release')
+for release in matching:
     gh('api', '-X', 'DELETE', f'repos/{REPO}/releases/{release["id"]}')
-elif '404' not in existing.stderr:
-    sys.exit(f'Cannot check existing release: {existing.stderr}')
 prerelease = '-' in TAG.split('+')[0]
 release = api(f'repos/{REPO}/releases', {'tag_name': TAG, 'name': TAG, 'body': 'Rio local CLI. See README.md for installation, verification, supported tools and exit codes.', 'draft': True, 'prerelease': prerelease, 'make_latest': 'false'})
 for index, asset in enumerate(assets):
