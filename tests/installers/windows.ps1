@@ -31,7 +31,7 @@ try {
     $null = New-Item -ItemType Directory -Path $env:RIO_CONFIG_DIR
     Set-Content -LiteralPath (Join-Path $env:RIO_CONFIG_DIR 'config.toml') -Value '# keep'
     $env:RIO_NO_MODIFY_PATH = '1'; Invoke-RioInstaller
-    $env:RIO_VERSION = 'latest'; Invoke-RioInstaller; $env:RIO_VERSION = 'v0.1.0' 
+    $env:RIO_VERSION = 'latest'; Invoke-RioInstaller; $env:RIO_VERSION = 'v0.1.0'
     Assert-Rio ([Environment]::GetEnvironmentVariable('Path', 'User') -ceq $rioOriginalPath) 'NoModifyPath modified PATH'
     $rioInstalled = Join-Path $env:RIO_INSTALL_DIR 'rio.exe'
     Assert-Rio (Test-Path $rioInstalled) 'Binary not installed'

@@ -2,6 +2,8 @@
 
 Rio reviews local Git changes with TypeScript and Python type checking, linting, secret scanning, diff coverage, dependency auditing, and a bounded impact graph. It runs on your machine. Rio is licensed under Apache-2.0.
 
+The current [automated acceptance evaluation](docs/evaluation/v0.1.md) concludes **no-go** for a stable v0.1 release. The implementation and release-candidate validation are available; the commands below describe published release installation.
+
 ## Install
 
 Release installers verify SHA-256 checksums before executing the binary. Linux binaries use musl; macOS and Windows binaries are available for x64 and arm64.
@@ -159,7 +161,7 @@ The cache contains source snapshots, pure extracted source trees, resolved profi
 
 Run records live at `<cache>/<review-id>/runs/<run-id>/`; `latest` names the most recently finished run. Review IDs identify the snapshot and resolved profile; each execution gets a distinct run ID. Shared entries publish atomically under locks; live references protect them during pruning. Age, reachability and LRU size rules control retention. Unix cache directories use mode 0700 and files 0600; Windows inherits the containing directory's ACL. Raw streams are redacted, capped at 16MiB each with head and tail retained, and can be disabled with `cache.retain_raw_output`. Source snapshots themselves retain source content, including any secrets present there.
 
-Working trees, indexes, branch merge bases, untracked non-ignored files, unborn HEAD, linked worktrees and sparse checkout are supported. Conflicted indexes are refused for working-tree and staged reviews. Bare repositories are refused. Shallow branch reviews need enough history for a merge base; fetch deeper history or unshallow. Submodules are recorded as gitlinks, not recursively reviewed. LFS pointers stay pointers. Unsafe paths, symlink traversal and case collisions on insensitive filesystems are rejected. macOS cannot reliably track descendants that escape a process group with `setsid`; Windows review features remain best effort, with tools supervised in Job Objects.
+Working trees, indexes, branch merge bases, untracked non-ignored files, unborn HEAD, linked worktrees and sparse checkout are supported. Conflicted indexes are refused for working-tree and staged reviews. Bare repositories are refused. Shallow branch reviews need enough history for a merge base; fetch deeper history or unshallow. Partial clones need the selected objects available locally; Rio does not fetch missing promised blobs. Hydrate the required history before reviewing. Submodules are recorded as gitlinks, not recursively reviewed. LFS pointers stay pointers. Unsafe paths, symlink traversal and case collisions on insensitive filesystems are rejected. macOS cannot reliably track descendants that escape a process group with `setsid`; Windows review features remain best effort, with tools supervised in Job Objects.
 
 ## Uninstall
 

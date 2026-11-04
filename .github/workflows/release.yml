@@ -57,7 +57,7 @@ jobs:
           fi
           echo "RIO_BUILD_VERSION=${tag#v}" >> "$GITHUB_ENV"
           echo "RIO_BUILD_COMMIT=$GITHUB_SHA" >> "$GITHUB_ENV"
-          if [[ "$tag" != *-* ]]; then python scripts/check-acceptance.py; fi
+          if [[ "${tag%%+*}" != *-* ]]; then python scripts/check-acceptance.py; fi
       - name: Install cross
         if: matrix.cross
         run: cargo install cross --version 0.2.5 --locked

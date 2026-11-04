@@ -47,7 +47,9 @@ async fn timeout_terminates_a_long_lived_grandchild_before_cleanup() {
     let root = tempfile::tempdir().unwrap();
     let code = "import subprocess,sys,time,pathlib; p=subprocess.Popen([sys.executable,'-c', 'import time; time.sleep(3600)']); pathlib.Path('child.pid').write_text(str(p.pid)); time.sleep(3600)";
     let mut request = command(root.path(), code);
-    request.timeout = Duration::from_millis(750);
+    // Windows runner startup can exceed 750 ms before Python writes the PID.
+    // The worker still sleeps for an hour, so this exercises timeout cleanup.
+    request.timeout = Duration::from_secs(3);
     let result = ProcessSupervisor::default()
         .run(request, CancellationToken::new())
         .await;

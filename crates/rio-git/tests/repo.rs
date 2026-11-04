@@ -121,6 +121,13 @@ fn conflicted_indexes_fail_local_modes_but_commit_mode_is_available() {
         .output()
         .unwrap();
     assert!(!output.status.success());
+    assert!(
+        fs::read_to_string(dir.path().join("a.ts"))
+            .unwrap()
+            .contains("<<<<<<<"),
+        "merge did not create a conflict: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let repo = GixRepo::discover(dir.path()).unwrap();
     for selection in [Selection::WorkingTree, Selection::Staged] {
         let error = select(&repo, selection).unwrap_err().to_string();

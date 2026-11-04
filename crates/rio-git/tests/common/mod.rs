@@ -28,6 +28,11 @@ pub fn git(root: &Path, args: &[&str]) -> String {
 pub fn init() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
     git(dir.path(), &["init", "-b", "main"]);
+    // Direct Git operations such as merge also need an isolated identity;
+    // CI must not depend on a developer's global Git configuration.
+    git(dir.path(), &["config", "user.name", "Rio Tests"]);
+    git(dir.path(), &["config", "user.email", "tests@rio.invalid"]);
+    git(dir.path(), &["config", "commit.gpgsign", "false"]);
     dir
 }
 
