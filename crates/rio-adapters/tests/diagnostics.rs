@@ -283,3 +283,27 @@ async fn real_eslint_configuration_failure_is_an_outcome_without_findings() {
     );
     assert!(outcome.details().findings.is_empty());
 }
+
+#[cfg(unix)]
+#[test]
+fn canonical_tool_paths_are_mapped_through_a_repository_directory_alias() {
+    let parent = tempfile::tempdir().unwrap();
+    let real = parent.path().join("real");
+    let alias = parent.path().join("alias");
+    std::fs::create_dir(&real).unwrap();
+    std::os::unix::fs::symlink(&real, &alias).unwrap();
+    let context = DiagnosticContext {
+        repository_root: &alias,
+        project_root: ".",
+        tool_version: "test",
+        worktree_root: None,
+        sources: None,
+    };
+    let output = serde_json::json!([{
+        "filename": real.canonicalize().unwrap().join("source.py"),
+        "code": "F821", "message": "Undefined name", "location": {"row": 1, "column": 1},
+        "end_location": {"row": 1, "column": 2}
+    }]);
+    let findings = parse_ruff(&serde_json::to_vec(&output).unwrap(), &context).unwrap();
+    assert_eq!(findings[0].location.path, "source.py");
+}

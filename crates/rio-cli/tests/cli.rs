@@ -706,6 +706,15 @@ fn interrupts_preserve_one_partial_document_and_second_interrupt_emits_none() {
                 std::thread::sleep(Duration::from_millis(20));
             }
         }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            // SAFETY: signal zero only checks this test's worker for survival.
+            while unsafe { libc::kill(worker, 0) } == 0 {
+                assert!(Instant::now() < deadline, "worker {worker} survived");
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        }
     }
 }
 

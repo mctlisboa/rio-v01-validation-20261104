@@ -40,10 +40,16 @@ pub(crate) fn normalized_path(path: &str, context: &DiagnosticContext<'_>) -> Re
         format!("{repository}/{}/{path}", context.project_root)
     })?;
     for root in std::iter::once(context.repository_root).chain(context.worktree_root) {
-        let root = lexical(&root.to_string_lossy().replace('\\', "/"))?;
-        if let Some(relative) = path.strip_prefix(&format!("{}/", root.trim_end_matches('/'))) {
-            ensure!(!relative.is_empty(), "diagnostic path is empty");
-            return Ok(relative.to_owned());
+        // Tools may report a canonical cwd while the disposable directory uses
+        // an alias (notably /var -> /private/var on macOS). Resolve only the
+        // trusted roots, never a diagnostic's potentially escaping leaf path.
+        let canonical = root.canonicalize().ok();
+        for root in std::iter::once(root).chain(canonical.as_deref()) {
+            let root = lexical(&root.to_string_lossy().replace('\\', "/"))?;
+            if let Some(relative) = path.strip_prefix(&format!("{}/", root.trim_end_matches('/'))) {
+                ensure!(!relative.is_empty(), "diagnostic path is empty");
+                return Ok(relative.to_owned());
+            }
         }
     }
     bail!("diagnostic path is outside the repository: {path}")
