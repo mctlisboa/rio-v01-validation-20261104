@@ -12,7 +12,7 @@ The checks step SHALL run, per detected language and project root, the following
 - **THEN** no test or coverage tool runs and the footer lists coverage as skipped with reason `disabled`
 
 ### Requirement: Baseline classification
-For `typecheck` and `lint`, the checks step SHALL run the tool on the head version and, when `baseline` is enabled (default), on the base version materialized from the change snapshot, and SHALL classify each finding by identity as `new` (head only), `pre-existing` (both) or `fixed` (base only). Base results SHALL be cached by base identifier, tool and tool configuration hash. When the base run cannot complete, findings SHALL be classified `unclassified` and the footer SHALL say why.
+For `typecheck` and `lint`, the checks step SHALL run the tool on the materialized head tree and, when `baseline` is enabled (default), on the materialized base tree, and SHALL classify each finding by identity as `new` (head only), `pre-existing` (both) or `fixed` (base only). Base results SHALL be cached under a key that covers every input that can change them: base identifier, project root, check kind, tool and tool version, the tool's configuration files, the exact invocation including the set of target files, and the dependency state (the hash of the root's manifests and lockfiles plus the content hash of every in-repository linked package's source). The base run uses the same installed dependencies as the head run, so it SHALL be used for classification only when that installation is also valid for the base: the installed dependency set equals the set the base's lockfile resolves, and every installed dependency resolving into the repository (workspace links, editable installs) points at source identical in the base and the work tree. When either condition fails or cannot be established, that root's `typecheck` and `lint` findings SHALL be classified `unclassified` and the footer SHALL record `baseline_failed` with a hint naming the dependency or linked package that differs. When the base run cannot complete, findings SHALL be classified `unclassified` and the footer SHALL say why.
 
 #### Scenario: Error caused in an unchanged file
 - **WHEN** a change alters a function signature and `tsc` reports a new error in an unchanged caller file
@@ -23,8 +23,39 @@ For `typecheck` and `lint`, the checks step SHALL run the tool on the head versi
 - **THEN** the finding is classified `pre-existing`, is not listed among new findings, and is counted in the report's pre-existing summary
 
 #### Scenario: Base run reused from cache
-- **WHEN** two consecutive reviews share the same base commit and tool configuration
+- **WHEN** two consecutive reviews share the same base commit, project root, tool configuration, invocation and dependency state
 - **THEN** the second review does not re-run the base type check and the footer reports the baseline as cached
+
+#### Scenario: Lint baseline not reused across different file sets
+- **WHEN** one review lints changed file `a.ts` and a later review on the same base lints changed file `b.ts`
+- **THEN** the second review does not reuse the first review's lint baseline, and pre-existing lint errors in `b.ts` are classified `pre-existing`, not `new`
+
+#### Scenario: Dependency change disables classification
+- **WHEN** a change upgrades a package in the lockfile and the type check reports an error in an unchanged file
+- **THEN** that root's type-check findings are classified `unclassified`, not `pre-existing`, and the footer records `baseline_failed` with a hint that dependencies changed
+
+#### Scenario: Workspace source change disables classification
+- **WHEN** a change edits `packages/ui/src/button.ts`, which another root imports through the workspace link `node_modules/@acme/ui`, without touching any manifest or lockfile, and the type check reports an error in an unchanged caller
+- **THEN** the importing root's type-check findings are classified `unclassified`, not `pre-existing`, and the footer records `baseline_failed` with a hint naming `packages/ui`
+
+### Requirement: Head dependency compatibility
+Tool-executing checks (`typecheck`, `lint`, `coverage`) use the dependencies installed in the work tree. Before running them on a project root, the checks step SHALL verify that the installed dependencies match the selected head, by comparing the `(name, version)` set recorded in the package manager's installation metadata with the set resolved by the head's lockfile, without assuming the installation was made from the work tree's current manifests; and that every installed dependency resolving into the repository (workspace links, editable installs) points at source identical in the work tree and the selected head. When either condition fails, or the installed state cannot be established (no lockfile, no exact pins, missing or unsupported installation metadata), those checks SHALL be skipped for that root with reason `dependency_mismatch` and a hint naming the differing file or package, rather than producing results computed against dependencies that do not belong to the reviewed head.
+
+#### Scenario: Unstaged dependency upgrade during a staged review
+- **WHEN** `rio review --staged` runs while `package.json` and `package-lock.json` have an unstaged upgrade that is installed in `node_modules`
+- **THEN** the root's type check, lint and coverage are skipped with reason `dependency_mismatch` and the hint names `package-lock.json`
+
+#### Scenario: Workspace link to locally modified source
+- **WHEN** `rio review --base main` runs and `node_modules/@acme/ui` links to `packages/ui`, which has uncommitted edits
+- **THEN** checks for roots that depend on `@acme/ui` are skipped with reason `dependency_mismatch` and the hint names `packages/ui`
+
+#### Scenario: Stale installation after a branch switch
+- **WHEN** the user switches to a branch whose `package-lock.json` pins `react@18.3.1` without reinstalling, `node_modules/.package-lock.json` still records `react@18.2.0`, and `rio review` runs in working-tree mode
+- **THEN** the root's type check, lint and coverage are skipped with reason `dependency_mismatch` and the hint names `react` and suggests reinstalling
+
+#### Scenario: Installed state cannot be verified
+- **WHEN** a Python root has only a `requirements.txt` without exact pins
+- **THEN** the root's type check, lint and coverage are skipped with reason `dependency_mismatch` and the hint says the installed dependencies cannot be verified
 
 ### Requirement: Secrets scan
 The secrets scan SHALL run over the head content of every changed text file using a built-in catalog of credential patterns (provider token formats, private key blocks, connection strings with embedded passwords) plus a high-entropy heuristic for values assigned to secret-like names. A match on an added or modified line SHALL be classified `new`; a match elsewhere in a changed file SHALL be `pre-existing`. The report SHALL NEVER print the matched value beyond its first four characters.
@@ -60,7 +91,7 @@ The dependency audit SHALL parse the manifests and lockfiles of both versions (n
 - **THEN** the dependency audit reports nothing to audit and no network request is made
 
 ### Requirement: Skipped checks are always visible
-Any check that does not run or does not complete SHALL appear in the report footer as a `check_skipped` entry with the check kind, language, project root, a reason from `tool_missing`, `no_project_config`, `not_supported_by_adapter`, `disabled`, `offline`, `network_error`, `timeout`, `unparseable_output`, `baseline_failed`, `interrupted`, and a hint when one applies.
+Any check that does not run or does not complete SHALL appear in the report footer as a `check_skipped` entry with the check kind, language, project root, a reason from `tool_missing`, `no_project_config`, `not_supported_by_adapter`, `disabled`, `offline`, `network_error`, `timeout`, `unparseable_output`, `baseline_failed`, `dependency_mismatch`, `interrupted`, and a hint when one applies.
 
 #### Scenario: Nothing skipped silently
 - **WHEN** a review finishes and some capability was declared by an adapter but produced no result

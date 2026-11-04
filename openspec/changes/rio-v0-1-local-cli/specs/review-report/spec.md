@@ -54,7 +54,7 @@ The footer SHALL always list: each skipped check with reason and hint; each defe
 - **THEN** the footer lists `triage`, `agents` and `verify` as deferred with reason `no_endpoint`
 
 ### Requirement: Review cache
-Each run SHALL write `.rio/cache/<review-id>/` containing `report.json`, `profile.resolved.yaml`, `graph/{base,head,delta}.json`, and `checks/<kind>/<root>/` with the raw tool output and the parsed findings. Snapshots SHALL be stored under `.rio/cache/snapshots/` and baselines under `.rio/cache/baselines/`. The system SHALL create `.rio/cache/.gitignore` containing `*` so the cache is never committed. Entries older than a configurable age (default 30 days) SHALL be pruned at the start of a run.
+Each run SHALL write `.rio/cache/<review-id>/` containing `report.json`, `profile.resolved.yaml`, `graph/{base,head,delta}.json`, and `checks/<kind>/<root>/` with the raw tool output and the parsed findings. Snapshots SHALL be stored under `.rio/cache/snapshots/`, base materializations and baseline results under `.rio/cache/baselines/`, and head materializations under `.rio/cache/heads/`. The system SHALL create `.rio/cache/.gitignore` containing `*` so the cache is never committed. Review directories older than a configurable age (default 30 days) SHALL be pruned at the start of a run, together with snapshots and head materializations no longer referenced by a remaining review.
 
 #### Scenario: Cache ignored by git
 - **WHEN** the first review runs in a repository

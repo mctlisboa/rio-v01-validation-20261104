@@ -19,7 +19,7 @@ A finding SHALL have: `id` (stable identity), `rule_id`, `category` (`defect` or
 - **THEN** no finding shows a confidence percentage or score
 
 ### Requirement: Stable identity
-The id SHALL be `blake3(rule_id | normalized_location | trigger_hash)` where `normalized_location` is the repository-relative path plus the enclosing symbol path with line numbers removed, and `trigger_hash` is the hash of the message with volatile fragments (numbers, absolute paths, generated identifiers) normalized. The id SHALL be stable when code moves within a file and when unrelated lines are inserted above it.
+The id SHALL be `blake3(rule_id | normalized_location | trigger_hash)` where `normalized_location` is the repository-relative path plus the enclosing symbol path with line numbers removed, and `trigger_hash` is the hash of the message with only known volatile fragments normalized: line and column references, absolute path prefixes and the repository root, and tool-generated identifiers. Semantic content of the message, including numeric literals, type names and casing, SHALL be preserved. The id SHALL be stable when code moves within a file and when unrelated lines are inserted above it, and SHALL differ for findings whose messages differ in semantic content.
 
 #### Scenario: Line shift keeps the id
 - **WHEN** ten lines are inserted above a function that has a type error, and the review is run again

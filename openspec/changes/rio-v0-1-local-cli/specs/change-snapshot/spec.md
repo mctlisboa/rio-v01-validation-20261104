@@ -27,7 +27,7 @@ The system SHALL produce, for each changed file, its status (`added`, `modified`
 - **THEN** it is listed as excluded with reason `lockfile` and is available to the dependency audit only
 
 ### Requirement: Content-addressed snapshot
-The system SHALL compute a snapshot key as the BLAKE3 hash over a canonical encoding of the base identifier plus the head content of every changed file (path, mode, content), so identical inputs yield identical keys regardless of when or where the review runs. The snapshot archive SHALL be written under the review cache as `snapshots/<key>.tar.zst` and SHALL contain only the changed files' head content and a manifest naming the base commit.
+The system SHALL compute a snapshot key as the BLAKE3 hash over a canonical encoding of the base identifier plus one entry per changed path, sorted by path: for a path present in the head, its path, mode and head content; for a path absent from the head (a deleted file, or the old path of a rename), its path and an explicit deletion marker. Identical inputs SHALL yield identical keys regardless of when or where the review runs. The snapshot archive SHALL be written under the review cache as `snapshots/<key>.tar.zst` and SHALL contain the changed files' head content and a manifest naming the base commit and listing every deleted path, so that applying the archive to the base tree reconstructs the head tree exactly.
 
 #### Scenario: Same content, same key
 - **WHEN** the same staged change is snapshotted twice on two machines with the same repository state
@@ -37,12 +37,32 @@ The system SHALL compute a snapshot key as the BLAKE3 hash over a canonical enco
 - **WHEN** a single trailing space is added to one changed file
 - **THEN** the snapshot key changes
 
+#### Scenario: Deletion-only changes are distinct
+- **WHEN** one change deletes `a.ts` and another change on the same base deletes `b.ts`
+- **THEN** the two snapshot keys differ, and each archive's manifest lists its deleted path
+
+#### Scenario: Head reconstruction drops deleted files
+- **WHEN** a snapshot whose change deletes `a.ts` and renames `b.ts` to `c.ts` is applied to the base tree
+- **THEN** the reconstructed head tree contains `c.ts` and contains neither `a.ts` nor `b.ts`
+
 ### Requirement: Both versions available
-The system SHALL be able to supply the base and head content of any changed file, and a read-only materialization of the whole base tree on demand, so checks can run against the base version. Materializations SHALL be cached by base identifier and SHALL never modify the user's working tree or index.
+The system SHALL be able to supply the base and head content of any changed file, and a materialization of the whole base tree and of the whole head tree on demand, outside the work tree. The base tree SHALL be cached by base identifier; the head tree SHALL be the base tree with the snapshot applied and SHALL be cached by snapshot key. Every check that executes a tool (type check, lint, tests and coverage) SHALL run against these materializations and never in the user's work tree, so the head that is checked is exactly the selected, immutable head: in staged mode it excludes unstaged edits, and in branch mode it excludes uncommitted changes. Materializations SHALL never modify the user's working tree or index, and tool writes inside a materialization SHALL not alter the cached tree used by later reviews. Tools SHALL run in a copy-on-write clone or an independent copy of a cached tree, never in a hard-linked one.
+
+#### Scenario: Tool writes do not reach the cache
+- **WHEN** a tool run rewrites an existing file in its tree in place
+- **THEN** the same file in the cached materialization is unchanged afterwards
 
 #### Scenario: Base tree materialized without touching the work tree
 - **WHEN** a check requests the full base tree in working-tree mode
-- **THEN** a read-only copy of the base tree is provided outside the work tree, and `git status` in the user's repository is unchanged afterwards
+- **THEN** a copy of the base tree is provided outside the work tree, and `git status` in the user's repository is unchanged afterwards
+
+#### Scenario: Staged review checks the index, not the work tree
+- **WHEN** `rio review --staged` runs while a staged file is type-correct and the same file has an unstaged edit that introduces a type error
+- **THEN** the type check runs on the materialized head tree built from the index and reports no error for that file
+
+#### Scenario: Branch review ignores uncommitted changes
+- **WHEN** `rio review --base main` runs with an uncommitted edit in the work tree
+- **THEN** checks run on the materialized `HEAD` commit tree and no finding refers to the uncommitted edit
 
 ### Requirement: Large diffs are flagged, not partitioned
 When the total changed line count exceeds the profile's `max_lines`, the system SHALL continue the review and SHALL add a note to the report footer stating the size and recommending a split. Partitioning into logical parts is out of scope for this version.

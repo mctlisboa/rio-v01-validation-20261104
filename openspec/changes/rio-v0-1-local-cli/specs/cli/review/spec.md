@@ -42,11 +42,15 @@ The command SHALL accept `--format terminal|json|md` and default to `terminal`. 
 - **THEN** the terminal report contains no ANSI escape sequences
 
 ### Requirement: Offline operation
-The command SHALL accept `--offline`. When set, no network connection SHALL be opened by any step; checks that need the network SHALL be reported as skipped with reason `offline`. When no endpoint is configured, every step that would need one SHALL be reported as deferred rather than failing the run.
+The command SHALL accept `--offline`. When set, the Rio process SHALL open no network connection, and built-in checks that need the network SHALL be reported as skipped with reason `offline`. Tool processes Rio executes (type checkers, linters and their plugins, and the project's tests run for coverage) are not network-isolated in this version; the guarantee does not extend to them, and the report footer SHALL state this whenever such a process ran. Preventing all network activity requires running Rio under external network isolation, such as a container or sandbox without network access, or disabling every check that runs a subprocess (`typecheck`, `lint` and `coverage`). When no endpoint is configured, every step that would need one SHALL be reported as deferred rather than failing the run.
 
 #### Scenario: Offline run skips the dependency audit
 - **WHEN** `rio review --offline` is run on a change that modifies a lockfile
 - **THEN** the report footer lists the dependency audit as skipped with reason `offline` and every other check runs normally
+
+#### Scenario: Offline footer states the subprocess limit
+- **WHEN** `rio review --offline` runs and at least one tool or test process executes
+- **THEN** the footer states that tool and test processes were not network-isolated
 
 #### Scenario: No endpoint configured is not an error
 - **WHEN** `rio review` is run on a machine with no Rio endpoint configured
