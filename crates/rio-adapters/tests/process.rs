@@ -47,9 +47,9 @@ async fn timeout_terminates_a_long_lived_grandchild_before_cleanup() {
     let root = tempfile::tempdir().unwrap();
     let code = "import subprocess,sys,time,pathlib; p=subprocess.Popen([sys.executable,'-c', 'import time; time.sleep(3600)']); pathlib.Path('child.pid').write_text(str(p.pid)); time.sleep(3600)";
     let mut request = command(root.path(), code);
-    // Windows runner startup can exceed 750 ms before Python writes the PID.
+    // Concurrent Python startup on Windows runners can take several seconds.
     // The worker still sleeps for an hour, so this exercises timeout cleanup.
-    request.timeout = Duration::from_secs(3);
+    request.timeout = Duration::from_secs(if cfg!(windows) { 15 } else { 3 });
     let result = ProcessSupervisor::default()
         .run(request, CancellationToken::new())
         .await;
@@ -89,7 +89,7 @@ async fn cancellation_terminates_all_workers_and_never_started_work_is_cancelled
                 .await
         })
     };
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     while !root.path().join("child.pid").exists() {
         assert!(tokio::time::Instant::now() < deadline);
         tokio::time::sleep(Duration::from_millis(10)).await;
