@@ -6,6 +6,16 @@ use rio_git::{Tree, TreeEntry};
 use serde_json::json;
 use std::{fs, path::Path};
 
+#[cfg(unix)]
+fn aliased_worktree() -> (tempfile::TempDir, std::path::PathBuf) {
+    let temporary = tempfile::tempdir().unwrap();
+    let source = temporary.path().join("source");
+    fs::create_dir(&source).unwrap();
+    let alias = temporary.path().join("alias");
+    std::os::unix::fs::symlink(&source, &alias).unwrap();
+    (temporary, alias)
+}
+
 fn put(tree: &mut Tree, path: &str, text: &str) {
     tree.insert(
         path.into(),
@@ -240,7 +250,7 @@ fn absent_installation_metadata_is_unverifiable_and_trustable_not_a_known_missin
 #[cfg(unix)]
 #[test]
 fn workspace_links_compare_source_against_head_and_base_even_with_unchanged_manifests() {
-    let root = tempfile::tempdir().unwrap();
+    let (_temporary, root) = aliased_worktree();
     let lockfile = json!({"lockfileVersion":3,"packages":{
         "":{"dependencies":{"shared":"file:packages/shared"}},
         "packages/shared":{"name":"shared","version":"1.0.0"},
@@ -252,23 +262,23 @@ fn workspace_links_compare_source_against_head_and_base_even_with_unchanged_mani
     put(&mut base, "packages/shared/src/a.ts", "export const a = 1;");
     let mut head = base.clone();
     put(&mut head, "packages/shared/src/a.ts", "export const a = 2;");
-    write(root.path(), "node_modules/.package-lock.json", &lockfile);
-    package(root.path(), "packages/shared", "shared", "1.0.0");
-    fs::create_dir_all(root.path().join("node_modules")).unwrap();
+    write(root.as_path(), "node_modules/.package-lock.json", &lockfile);
+    package(root.as_path(), "packages/shared", "shared", "1.0.0");
+    fs::create_dir_all(root.as_path().join("node_modules")).unwrap();
     std::os::unix::fs::symlink(
         "../packages/shared",
-        root.path().join("node_modules/shared"),
+        root.as_path().join("node_modules/shared"),
     )
     .unwrap();
     let lock = governing_lockfile(&head, ".", None, Ecosystem::Npm)
         .unwrap()
         .unwrap();
-    let installed = read_installation(root.path(), ".", &lock.graph);
+    let installed = read_installation(root.as_path(), ".", &lock.graph);
     assert_eq!(installed.links.len(), 1);
-    let head_result = check(root.path(), &head, &head, Some(&lock), &installed, false);
+    let head_result = check(root.as_path(), &head, &head, Some(&lock), &installed, false);
     assert!(head_result.can_run(), "{head_result:?}");
     for trust in [false, true] {
-        let result = check(root.path(), &head, &base, Some(&lock), &installed, trust);
+        let result = check(root.as_path(), &head, &base, Some(&lock), &installed, trust);
         assert!(
             matches!(result, Compatibility::Mismatch { .. }),
             "{result:?}"
@@ -278,7 +288,14 @@ fn workspace_links_compare_source_against_head_and_base_even_with_unchanged_mani
     let mut changed = head.clone();
     put(&mut changed, "packages/shared/src/a.ts", "uncommitted");
     assert!(matches!(
-        check(root.path(), &changed, &head, Some(&lock), &installed, false),
+        check(
+            root.as_path(),
+            &changed,
+            &head,
+            Some(&lock),
+            &installed,
+            false
+        ),
         Compatibility::Mismatch { .. }
     ));
 }
@@ -419,7 +436,7 @@ fn python_dist_info_without_dev_group_is_compatible() {
 #[cfg(unix)]
 #[test]
 fn irrelevant_workspace_links_do_not_disable_a_root_and_wrong_link_targets_are_rejected() {
-    let root = tempfile::tempdir().unwrap();
+    let (_temporary, root) = aliased_worktree();
     let lockfile = json!({"lockfileVersion":3,"packages":{
         "":{"dependencies":{"shared":"file:packages/shared"}},
         "packages/shared":{"name":"shared","version":"1.0.0"},
@@ -434,25 +451,25 @@ fn irrelevant_workspace_links_do_not_disable_a_root_and_wrong_link_targets_are_r
     put(&mut selected, "packages/unrelated/a.ts", "base");
     let mut working = selected.clone();
     put(&mut working, "packages/unrelated/a.ts", "modified");
-    write(root.path(), "node_modules/.package-lock.json", &lockfile);
-    package(root.path(), "packages/shared", "shared", "1.0.0");
-    package(root.path(), "packages/unrelated", "unrelated", "1.0.0");
+    write(root.as_path(), "node_modules/.package-lock.json", &lockfile);
+    package(root.as_path(), "packages/shared", "shared", "1.0.0");
+    package(root.as_path(), "packages/unrelated", "unrelated", "1.0.0");
     std::os::unix::fs::symlink(
         "../packages/shared",
-        root.path().join("node_modules/shared"),
+        root.as_path().join("node_modules/shared"),
     )
     .unwrap();
     std::os::unix::fs::symlink(
         "../packages/unrelated",
-        root.path().join("node_modules/unrelated"),
+        root.as_path().join("node_modules/unrelated"),
     )
     .unwrap();
     let lock = governing_lockfile(&selected, ".", None, Ecosystem::Npm)
         .unwrap()
         .unwrap();
-    let installed = read_installation(root.path(), ".", &lock.graph);
+    let installed = read_installation(root.as_path(), ".", &lock.graph);
     let result = check(
-        root.path(),
+        root.as_path(),
         &working,
         &selected,
         Some(&lock),
@@ -460,13 +477,16 @@ fn irrelevant_workspace_links_do_not_disable_a_root_and_wrong_link_targets_are_r
         false,
     );
     assert!(result.can_run(), "{result:?}");
-    fs::remove_file(root.path().join("node_modules/shared")).unwrap();
-    package(root.path(), "packages/wrong", "shared", "1.0.0");
-    std::os::unix::fs::symlink("../packages/wrong", root.path().join("node_modules/shared"))
-        .unwrap();
-    let installed = read_installation(root.path(), ".", &lock.graph);
+    fs::remove_file(root.as_path().join("node_modules/shared")).unwrap();
+    package(root.as_path(), "packages/wrong", "shared", "1.0.0");
+    std::os::unix::fs::symlink(
+        "../packages/wrong",
+        root.as_path().join("node_modules/shared"),
+    )
+    .unwrap();
+    let installed = read_installation(root.as_path(), ".", &lock.graph);
     let result = check(
-        root.path(),
+        root.as_path(),
         &selected,
         &selected,
         Some(&lock),
@@ -483,7 +503,7 @@ fn irrelevant_workspace_links_do_not_disable_a_root_and_wrong_link_targets_are_r
 #[cfg(unix)]
 #[test]
 fn python_editable_links_and_pth_sources_are_checked_against_selected_source() {
-    let root = tempfile::tempdir().unwrap();
+    let (_temporary, root) = aliased_worktree();
     let mut selected = Tree::new();
     put(&mut selected, "requirements.txt", "shared==1.0.0\n");
     put(&mut selected, "packages/shared/a.py", "source");
@@ -491,24 +511,24 @@ fn python_editable_links_and_pth_sources_are_checked_against_selected_source() {
     put(&mut working, "packages/shared/a.py", "modified");
     let site = ".venv/lib/python3.12/site-packages";
     write(
-        root.path(),
+        root.as_path(),
         &format!("{site}/shared-1.0.0.dist-info/METADATA"),
         "Metadata-Version: 2.3\nName: shared\nVersion: 1.0.0\n",
     );
-    fs::create_dir_all(root.path().join("packages/shared")).unwrap();
-    write(root.path(),&format!("{site}/shared-1.0.0.dist-info/direct_url.json"),&json!({"url":format!("file://{}",root.path().join("packages/shared").display()),"dir_info":{"editable":true}}).to_string());
+    fs::create_dir_all(root.as_path().join("packages/shared")).unwrap();
+    write(root.as_path(),&format!("{site}/shared-1.0.0.dist-info/direct_url.json"),&json!({"url":format!("file://{}",root.as_path().join("packages/shared").display()),"dir_info":{"editable":true}}).to_string());
     write(
-        root.path(),
+        root.as_path(),
         &format!("{site}/shared.pth"),
-        root.path().join("packages/shared").to_str().unwrap(),
+        root.as_path().join("packages/shared").to_str().unwrap(),
     );
     let lock = governing_lockfile(&selected, ".", None, Ecosystem::PyPi)
         .unwrap()
         .unwrap();
-    let installed = read_installation(root.path(), ".", &lock.graph);
+    let installed = read_installation(root.as_path(), ".", &lock.graph);
     assert_eq!(installed.links.len(), 2);
     let result = check(
-        root.path(),
+        root.as_path(),
         &working,
         &selected,
         Some(&lock),

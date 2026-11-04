@@ -367,8 +367,12 @@ pub fn check_compatibility(request: CompatibilityRequest<'_>) -> Compatibility {
     };
     // Linked source differences are known mismatches even if other installation
     // metadata is absent. Trust must never mask them.
+    let canonical_worktree = request
+        .worktree
+        .canonicalize()
+        .unwrap_or_else(|_| request.worktree.to_path_buf());
     for (name, target) in &request.installation.links {
-        let Ok(relative) = target.strip_prefix(request.worktree) else {
+        let Ok(relative) = target.strip_prefix(&canonical_worktree) else {
             continue;
         };
         let relative = relative.to_string_lossy().replace('\\', "/");

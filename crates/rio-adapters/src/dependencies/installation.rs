@@ -54,9 +54,10 @@ fn read_metadata(root: &Path, path: &str, installation: &mut Installation) -> Re
 fn record_link(worktree: &Path, path: &Path, installation: &mut Installation) -> Result<()> {
     if fs::symlink_metadata(path)?.file_type().is_symlink() {
         let target = path.canonicalize()?;
-        if target.starts_with(worktree)
+        let canonical_worktree = worktree.canonicalize()?;
+        if target.starts_with(&canonical_worktree)
             && !target
-                .strip_prefix(worktree)?
+                .strip_prefix(&canonical_worktree)?
                 .components()
                 .any(|component| {
                     matches!(
@@ -277,6 +278,7 @@ fn yarn(
 }
 
 fn python(worktree: &Path, installation_root: &str, installation: &mut Installation) -> Result<()> {
+    let canonical_worktree = worktree.canonicalize()?;
     let root = worktree.join(installation_root);
     let environment = [root.join(".venv"), root.join("venv")]
         .into_iter()
@@ -322,7 +324,7 @@ fn python(worktree: &Path, installation_root: &str, installation: &mut Installat
                         let target = site.join(line);
                         if target.is_dir() {
                             let target = target.canonicalize()?;
-                            if target.starts_with(worktree) {
+                            if target.starts_with(&canonical_worktree) {
                                 installation.links.insert(
                                     path.strip_prefix(worktree)?
                                         .to_string_lossy()
@@ -375,10 +377,10 @@ fn python(worktree: &Path, installation_root: &str, installation: &mut Installat
                         .map_err(|_| anyhow::anyhow!("invalid editable file URL"))?;
                     if target.is_dir() {
                         let target = target.canonicalize()?;
-                        if target.starts_with(worktree) {
+                        if target.starts_with(&canonical_worktree) {
                             entry.link = Some(
                                 target
-                                    .strip_prefix(worktree)?
+                                    .strip_prefix(&canonical_worktree)?
                                     .to_string_lossy()
                                     .replace('\\', "/"),
                             );
