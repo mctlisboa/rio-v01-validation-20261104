@@ -1,0 +1,58 @@
+## Purpose
+
+The finding model is the single representation every check, renderer and later agent shares: what was found, where, with what evidence, whether it is a regression, and a stable identity across runs.
+
+## ADDED Requirements
+
+### Requirement: Finding model
+A finding SHALL have: `id` (stable identity), `rule_id`, `category` (`defect` or `risk`), `evidence_level`, `severity` (`error`, `warning`, `info`), `state` (`new`, `pre-existing`, `fixed`, `unclassified`), `location` (repository-relative path, line range, optional column, enclosing symbol path), `message`, `trigger` (the condition under which the problem manifests), optional `impact`, optional `suggested_fix`, `evidence` (references to artifacts in the review cache), `source` (tool and version, or agent name), and `locations` for additional occurrences merged by root cause. The JSON form SHALL validate against `schemas/finding-v1.json`.
+
+#### Scenario: JSON validates against the schema
+- **WHEN** a review is rendered as JSON
+- **THEN** every finding in the document validates against `schemas/finding-v1.json`
+
+### Requirement: Evidence levels
+`evidence_level` SHALL be one of `reproduced`, `static_proven`, `plausible`, `refuted`, ordered from strongest to weakest. A finding SHALL NEVER carry a numeric confidence. Findings below `plausible` SHALL never be rendered. Deterministic checks SHALL emit `static_proven`.
+
+#### Scenario: No percentages anywhere
+- **WHEN** any report format is produced
+- **THEN** no finding shows a confidence percentage or score
+
+### Requirement: Stable identity
+The id SHALL be `blake3(rule_id | normalized_location | trigger_hash)` where `normalized_location` is the repository-relative path plus the enclosing symbol path with line numbers removed, and `trigger_hash` is the hash of the message with volatile fragments (numbers, absolute paths, generated identifiers) normalized. The id SHALL be stable when code moves within a file and when unrelated lines are inserted above it.
+
+#### Scenario: Line shift keeps the id
+- **WHEN** ten lines are inserted above a function that has a type error, and the review is run again
+- **THEN** the finding keeps the same id
+
+#### Scenario: Different rule gives a different id
+- **WHEN** two different lint rules fire on the same line
+- **THEN** they produce two findings with different ids
+
+### Requirement: One finding per root cause
+Findings from the same source with equal `rule_id`, enclosing symbol path and `trigger_hash` SHALL be merged into one finding whose `locations` lists every occurrence. Separate root causes SHALL NOT be merged even when they share a line.
+
+#### Scenario: Repeated error in one function
+- **WHEN** the type checker reports the same error code and message on four lines of one function
+- **THEN** the report shows one finding with four locations
+
+### Requirement: Regression state
+`state` SHALL be set from baseline classification where available: `new` for findings absent from the base version, `pre-existing` for findings present in both, `fixed` for findings only in base, and `unclassified` when no baseline was obtained. Only `new` and `unclassified` findings SHALL be rendered in the main findings section.
+
+#### Scenario: Fixed finding counted
+- **WHEN** a lint error present in base is absent in head
+- **THEN** the report's summary counts one fixed finding and does not list it as open
+
+### Requirement: Category separates defects from risks
+`category` SHALL be `defect` for type errors, lint errors, secrets and vulnerable dependencies, and `risk` for untested changes. Renderers SHALL present risks in a section separate from defects and SHALL NOT call a risk a bug.
+
+#### Scenario: Risk section
+- **WHEN** a review has one type error and two untested changes
+- **THEN** the report lists one defect under findings and two entries under risks
+
+### Requirement: Suppression application
+Suppressions from the resolved profile SHALL be applied after identity assignment and before rendering, and each suppressed finding SHALL be counted by suppression entry in the footer.
+
+#### Scenario: Suppressed by id
+- **WHEN** the profile suppresses a specific finding id
+- **THEN** that finding is absent from every format and the footer attributes one suppression to that entry

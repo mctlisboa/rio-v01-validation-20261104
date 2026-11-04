@@ -1,0 +1,50 @@
+# Rust
+/target/
+**/target/
+Cargo.lock.bak
+*.rs.bk
+
+# Rio local review cache (also self-ignored by .rio/cache/.gitignore)
+.rio/cache/
+
+# Node (fixtures, worker)
+node_modules/
+dist/
+coverage/
+.wrangler/
+*.tsbuildinfo
+npm-debug.log*
+pnpm-debug.log*
+yarn-error.log*
+
+# Python (fixtures, eval tooling)
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+coverage.json
+htmlcov/
+
+# Secrets and local config (never commit)
+.env
+.env.*
+!.env.example
+.dev.vars
+*.pem
+*.key
+
+# Editors and OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Claude Code local settings
+.claude/settings.local.json

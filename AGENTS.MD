@@ -1,0 +1,1 @@
+Do not add co-author comments and trails on any commit and PRs.
