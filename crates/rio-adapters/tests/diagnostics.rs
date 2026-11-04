@@ -156,13 +156,20 @@ async fn fixture_diagnostic(
         .resolve(tool, ".", language, &supervisor, CancellationToken::new())
         .await
         .unwrap();
-    let mut command =
-        diagnostic_command(&tool, &tree, disposable.path(), ".", &[target.into()]).unwrap();
+    #[cfg(unix)]
+    let tool_root = {
+        let alias = temporary.path().join("tool-alias");
+        std::os::unix::fs::symlink(disposable.path(), &alias).unwrap();
+        alias
+    };
+    #[cfg(not(unix))]
+    let tool_root = disposable.path().to_path_buf();
+    let mut command = diagnostic_command(&tool, &tree, &tool_root, ".", &[target.into()]).unwrap();
     command.timeout = Duration::from_secs(30);
     let result = supervisor.run(command, CancellationToken::new()).await;
     assert!(result.cleanup_confirmed);
     let context = DiagnosticContext {
-        repository_root: disposable.path(),
+        repository_root: &tool_root,
         project_root: ".",
         tool_version: &tool.version,
         worktree_root: Some(&source),
@@ -228,7 +235,8 @@ async fn installed_fixture_tools_run_only_in_disposable_trees() {
                     .details()
                     .findings
                     .iter()
-                    .any(|finding| finding.rule_id == rule)
+                    .any(|finding| finding.rule_id == rule),
+                "{tool}: expected {rule}; got {outcome:?}"
             );
         }
     }

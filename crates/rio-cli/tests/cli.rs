@@ -511,10 +511,10 @@ fn tool_failure_is_incomplete_and_doctor_prefers_project_local_tool() {
         .find(|c| c["kind"] == "typecheck")
         .unwrap();
     assert!(
-        tsc["tool"]["path"]
-            .as_str()
+        Path::new(tsc["tool"]["path"].as_str().unwrap())
+            .canonicalize()
             .unwrap()
-            .starts_with(root.to_str().unwrap())
+            .starts_with(root.canonicalize().unwrap())
     );
     assert_eq!(tsc["tool"]["version"], "Version 5.7.3");
     assert!(tsc["skip"].is_null());

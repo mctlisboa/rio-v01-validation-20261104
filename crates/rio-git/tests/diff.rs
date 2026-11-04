@@ -42,7 +42,8 @@ fn diff_snapshot_covers_git_file_kinds_and_exclusions() {
         "renamed.ts",
         "export function old() {\n  return 2;\n}\n// tail\n",
     );
-    fs::rename(dir.path().join("Case.ts"), dir.path().join("case.ts")).unwrap();
+    // Update the index explicitly on case-insensitive filesystems too.
+    git(dir.path(), &["mv", "-f", "Case.ts", "case.ts"]);
     write(dir.path(), "added.ts", "brand new content\n");
     write(dir.path(), "asset.bin", "new binary\0");
     write(

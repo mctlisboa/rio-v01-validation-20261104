@@ -2,7 +2,7 @@ use crate::{
     Adapter, DiagnosticContext, parse_eslint, parse_mypy, parse_pyright, parse_ruff, parse_tsc,
 };
 use crate::{ResolvedTool, ToolCommand};
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use rio_core::Finding;
 use rio_core::{CheckDetails, CheckKind, CheckOutcome, SkipReason};
 use rio_git::Tree;
@@ -18,6 +18,12 @@ pub fn diagnostic_command(
     root: &str,
     targets: &[String],
 ) -> Result<ToolCommand> {
+    // Use one spelling for the cwd and targets. Node tools may otherwise treat
+    // /var/... targets as outside a cwd resolved to /private/var/... on macOS.
+    let canonical_tree = tool_tree
+        .canonicalize()
+        .context("cannot resolve disposable tool tree")?;
+    let tool_tree = canonical_tree.as_path();
     let mut command = ToolCommand::new(tool.path.clone(), tool_tree.join(root));
     let args: Vec<String> = match tool.name.as_str() {
         "tsc" => {
